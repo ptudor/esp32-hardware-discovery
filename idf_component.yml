@@ -1,0 +1,18 @@
+# idf_component.yml
+version: "1.0.0"
+description: Hardware capability discovery using 24AA02E64 EEPROM with 4-byte IC descriptors
+url: https://www.ptudor.net/esp-idf/esp_hardware_discovery
+documentation: https://www.ptudor.net/esp-idf/esp_hardware_discovery/README.html
+
+dependencies:
+  idf:
+    version: ">=5.0.0"
+
+targets:
+  - esp32
+  - esp32s2
+  - esp32s3
+  - esp32c2
+  - esp32c3
+  - esp32c6
+  - esp32h2
