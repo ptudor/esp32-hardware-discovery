@@ -2,147 +2,276 @@
  * @file esp_hardware_discovery.c
  * @brief Hardware capability discovery with 4-byte IC descriptors
  * @version 1.0.0
- * 
+ *
  * Implementation for reading/writing board capabilities to 24AA02E64 EEPROM
  */
 
 #include "esp_hardware_discovery.h"
 #include "esp_log.h"
-#include "driver/i2c.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
+#include <inttypes.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
 static const char *TAG = "EEPROM_CAP";
 
 // I2C parameters
-#define I2C_MASTER_TIMEOUT_MS       100
-#define EEPROM_WRITE_DELAY_MS       5       // Page write time
+#define I2C_MASTER_TIMEOUT_MS           100
+#define EEPROM_PAGE_SIZE                8   // 24AA02E64 page write buffer
+#define EEPROM_WRITE_CYCLE_TIMEOUT_MS   6   // Twc max is 5ms; +1ms margin
+#define EEPROM_ADDR_COUNT               8   // 0x50-0x57 (A0-A2 pins)
 
 // ============================================================================
-// LOW-LEVEL I2C FUNCTIONS
+// MODULE STATE (set up by eeprom_discovery_init)
+// ============================================================================
+
+static i2c_master_bus_handle_t s_bus = NULL;
+static i2c_master_dev_handle_t s_devices[EEPROM_ADDR_COUNT] = { NULL };
+static SemaphoreHandle_t s_lock = NULL;
+
+// EEPROM programming state. Tri-state: a bus error must never be mistaken
+// for a blank device, or the force=false overwrite guard could be bypassed.
+typedef enum {
+    EEPROM_STATE_BLANK,
+    EEPROM_STATE_PROGRAMMED,
+    EEPROM_STATE_BUS_ERROR,
+} eeprom_prog_state_t;
+
+esp_err_t eeprom_discovery_init(i2c_master_bus_handle_t bus_handle) {
+    if (bus_handle == NULL) {
+        ESP_LOGE(TAG, "NULL bus handle");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (s_bus != NULL) {
+        ESP_LOGE(TAG, "Already initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    s_lock = xSemaphoreCreateMutex();
+    if (s_lock == NULL) {
+        ESP_LOGE(TAG, "Failed to create mutex");
+        return ESP_ERR_NO_MEM;
+    }
+
+    s_bus = bus_handle;
+    return ESP_OK;
+}
+
+static bool eeprom_check_init(void) {
+    if (s_bus == NULL) {
+        ESP_LOGE(TAG, "Not initialized - call eeprom_discovery_init() first");
+        return false;
+    }
+    return true;
+}
+
+static void eeprom_lock(void) {
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+}
+
+static void eeprom_unlock(void) {
+    xSemaphoreGive(s_lock);
+}
+
+// ============================================================================
+// LOW-LEVEL I2C FUNCTIONS (callers must hold the module lock)
 // ============================================================================
 
 /**
- * @brief Write bytes to EEPROM
+ * @brief Get (lazily creating) the device handle for an EEPROM address
  */
-static esp_err_t eeprom_write_bytes(uint8_t i2c_addr, uint8_t mem_addr, 
+static i2c_master_dev_handle_t eeprom_get_device(uint8_t i2c_addr) {
+    if (i2c_addr < EEPROM_I2C_ADDR_0 || i2c_addr > EEPROM_I2C_ADDR_7) {
+        ESP_LOGE(TAG, "Address 0x%02X outside 24AA02E64 range 0x50-0x57", i2c_addr);
+        return NULL;
+    }
+
+    int slot = i2c_addr - EEPROM_I2C_ADDR_BASE;
+
+    if (s_devices[slot] == NULL) {
+        i2c_device_config_t dev_cfg = {
+            .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+            .device_address = i2c_addr,
+            .scl_speed_hz = EEPROM_DISCOVERY_I2C_SPEED_HZ,
+        };
+
+        esp_err_t ret = i2c_master_bus_add_device(s_bus, &dev_cfg, &s_devices[slot]);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to add I2C device at 0x%02X: %d", i2c_addr, ret);
+            s_devices[slot] = NULL;
+            return NULL;
+        }
+    }
+
+    return s_devices[slot];
+}
+
+/**
+ * @brief ACK-poll until the EEPROM finishes its internal write cycle
+ *
+ * After a page write the 24AA02E64 NACKs its own address until the write
+ * cycle (Twc, max 5ms) completes.
+ */
+static esp_err_t eeprom_wait_write_complete(uint8_t i2c_addr) {
+    TickType_t start = xTaskGetTickCount();
+    TickType_t timeout_ticks = pdMS_TO_TICKS(EEPROM_WRITE_CYCLE_TIMEOUT_MS) + 1;
+
+    do {
+        if (i2c_master_probe(s_bus, i2c_addr, 10) == ESP_OK) {
+            return ESP_OK;
+        }
+    } while ((TickType_t)(xTaskGetTickCount() - start) <= timeout_ticks);
+
+    ESP_LOGE(TAG, "EEPROM at 0x%02X did not complete write cycle", i2c_addr);
+    return ESP_ERR_TIMEOUT;
+}
+
+/**
+ * @brief Write bytes to EEPROM
+ *
+ * Splits the write into transactions that respect the 24AA02E64's 8-byte
+ * page buffer: each transaction carries at most 8 data bytes and never
+ * crosses a page boundary (longer transactions would silently wrap around
+ * within the page and corrupt data). ACK-polls after every page.
+ */
+static esp_err_t eeprom_write_bytes(uint8_t i2c_addr, uint8_t mem_addr,
                                      const uint8_t *data, size_t len) {
     if (data == NULL || len == 0) {
         return ESP_ERR_INVALID_ARG;
     }
-    
-    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
-    i2c_master_start(cmd);
-    i2c_master_write_byte(cmd, (i2c_addr << 1) | I2C_MASTER_WRITE, true);
-    i2c_master_write_byte(cmd, mem_addr, true);
-    i2c_master_write(cmd, data, len, true);
-    i2c_master_stop(cmd);
-    
-    esp_err_t ret = i2c_master_cmd_begin(I2C_NUM_0, cmd, 
-                                          pdMS_TO_TICKS(I2C_MASTER_TIMEOUT_MS));
-    i2c_cmd_link_delete(cmd);
-    
-    if (ret == ESP_OK) {
-        vTaskDelay(pdMS_TO_TICKS(EEPROM_WRITE_DELAY_MS));
+
+    if ((size_t)mem_addr + len > EEPROM_24AA02E64_SIZE) {
+        ESP_LOGE(TAG, "Write out of bounds: addr %u + len %zu > %d",
+                 mem_addr, len, EEPROM_24AA02E64_SIZE);
+        return ESP_ERR_INVALID_SIZE;
     }
-    
-    return ret;
+
+    if ((size_t)mem_addr + len > EEPROM_UNIQUE_ID_START) {
+        ESP_LOGE(TAG, "Write overlaps factory unique ID region (0x%02X-0xFF)",
+                 EEPROM_UNIQUE_ID_START);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    i2c_master_dev_handle_t dev = eeprom_get_device(i2c_addr);
+    if (dev == NULL) {
+        return ESP_FAIL;
+    }
+
+    size_t written = 0;
+
+    while (written < len) {
+        uint8_t addr = mem_addr + written;
+        size_t page_remaining = EEPROM_PAGE_SIZE - (addr % EEPROM_PAGE_SIZE);
+        size_t chunk = len - written;
+        if (chunk > page_remaining) {
+            chunk = page_remaining;
+        }
+
+        uint8_t buf[1 + EEPROM_PAGE_SIZE];
+        buf[0] = addr;
+        memcpy(&buf[1], &data[written], chunk);
+
+        esp_err_t ret = i2c_master_transmit(dev, buf, 1 + chunk,
+                                            I2C_MASTER_TIMEOUT_MS);
+        if (ret != ESP_OK) {
+            return ret;
+        }
+
+        ret = eeprom_wait_write_complete(i2c_addr);
+        if (ret != ESP_OK) {
+            return ret;
+        }
+
+        written += chunk;
+    }
+
+    return ESP_OK;
 }
 
 /**
  * @brief Read bytes from EEPROM
+ *
+ * Sequential reads are not limited by the page buffer; a single transaction
+ * may cover any in-bounds range.
  */
-static esp_err_t eeprom_read_bytes(uint8_t i2c_addr, uint8_t mem_addr, 
+static esp_err_t eeprom_read_bytes(uint8_t i2c_addr, uint8_t mem_addr,
                                     uint8_t *data, size_t len) {
     if (data == NULL || len == 0) {
         return ESP_ERR_INVALID_ARG;
     }
-    
-    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
-    
-    // Set address
-    i2c_master_start(cmd);
-    i2c_master_write_byte(cmd, (i2c_addr << 1) | I2C_MASTER_WRITE, true);
-    i2c_master_write_byte(cmd, mem_addr, true);
-    
-    // Read data
-    i2c_master_start(cmd);
-    i2c_master_write_byte(cmd, (i2c_addr << 1) | I2C_MASTER_READ, true);
-    
-    if (len > 1) {
-        i2c_master_read(cmd, data, len - 1, I2C_MASTER_ACK);
+
+    if ((size_t)mem_addr + len > EEPROM_24AA02E64_SIZE) {
+        ESP_LOGE(TAG, "Read out of bounds: addr %u + len %zu > %d",
+                 mem_addr, len, EEPROM_24AA02E64_SIZE);
+        return ESP_ERR_INVALID_SIZE;
     }
-    i2c_master_read_byte(cmd, &data[len - 1], I2C_MASTER_NACK);
-    i2c_master_stop(cmd);
-    
-    esp_err_t ret = i2c_master_cmd_begin(I2C_NUM_0, cmd, 
-                                          pdMS_TO_TICKS(I2C_MASTER_TIMEOUT_MS));
-    i2c_cmd_link_delete(cmd);
-    
-    return ret;
+
+    i2c_master_dev_handle_t dev = eeprom_get_device(i2c_addr);
+    if (dev == NULL) {
+        return ESP_FAIL;
+    }
+
+    return i2c_master_transmit_receive(dev, &mem_addr, 1, data, len,
+                                       I2C_MASTER_TIMEOUT_MS);
 }
 
 /**
  * @brief Check if EEPROM is present at address
  */
 static bool eeprom_probe(uint8_t i2c_addr) {
-    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
-    i2c_master_start(cmd);
-    i2c_master_write_byte(cmd, (i2c_addr << 1) | I2C_MASTER_WRITE, true);
-    i2c_master_stop(cmd);
-    
-    esp_err_t ret = i2c_master_cmd_begin(I2C_NUM_0, cmd, 
-                                          pdMS_TO_TICKS(I2C_MASTER_TIMEOUT_MS));
-    i2c_cmd_link_delete(cmd);
-    
-    return (ret == ESP_OK);
+    return (i2c_master_probe(s_bus, i2c_addr, I2C_MASTER_TIMEOUT_MS) == ESP_OK);
 }
 
-// ============================================================================
-// PUBLIC API FUNCTIONS
-// ============================================================================
-
-bool eeprom_is_programmed(uint8_t i2c_addr) {
+/**
+ * @brief Read the magic byte and classify the device state
+ *
+ * Distinguishes "blank" from "bus error" so callers can refuse to act on a
+ * failed read instead of treating it as an unprogrammed device.
+ */
+static eeprom_prog_state_t eeprom_get_prog_state(uint8_t i2c_addr) {
     uint8_t magic;
     esp_err_t ret = eeprom_read_bytes(i2c_addr, CAP_OFFSET_MAGIC, &magic, 1);
-    
+
     if (ret != ESP_OK) {
-        return false;
+        return EEPROM_STATE_BUS_ERROR;
     }
-    
-    return (magic >= CAP_MAGIC_MIN && magic <= CAP_MAGIC_MAX);
+
+    if (magic >= CAP_MAGIC_MIN && magic <= CAP_MAGIC_MAX) {
+        return EEPROM_STATE_PROGRAMMED;
+    }
+
+    return EEPROM_STATE_BLANK;
 }
 
-bool eeprom_read_unique_id(uint8_t i2c_addr, uint8_t *unique_id) {
-    if (unique_id == NULL) {
-        return false;
-    }
-    
-    esp_err_t ret = eeprom_read_bytes(i2c_addr, EEPROM_UNIQUE_ID_START, 
+// ============================================================================
+// UNLOCKED INTERNALS (callers must hold the module lock)
+// ============================================================================
+
+static bool eeprom_read_unique_id_unlocked(uint8_t i2c_addr, uint8_t *unique_id) {
+    esp_err_t ret = eeprom_read_bytes(i2c_addr, EEPROM_UNIQUE_ID_START,
                                        unique_id, EEPROM_UNIQUE_ID_SIZE);
-    
+
     return (ret == ESP_OK);
 }
 
-bool eeprom_read_capabilities(uint8_t i2c_addr, eeprom_capabilities_t *caps) {
-    if (caps == NULL) {
-        ESP_LOGE(TAG, "NULL capabilities pointer");
-        return false;
-    }
-    
+static bool eeprom_read_capabilities_unlocked(uint8_t i2c_addr,
+                                              eeprom_capabilities_t *caps) {
     memset(caps, 0, sizeof(eeprom_capabilities_t));
     caps->i2c_address = i2c_addr;
-    
-    // Read header (8 bytes)
-    uint8_t header[8];
-    esp_err_t ret = eeprom_read_bytes(i2c_addr, CAP_OFFSET_MAGIC, header, 8);
+
+    // Read header including timestamp (16 bytes)
+    uint8_t header[16];
+    esp_err_t ret = eeprom_read_bytes(i2c_addr, CAP_OFFSET_MAGIC,
+                                       header, sizeof(header));
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to read header from 0x%02X", i2c_addr);
         return false;
     }
-    
+
     caps->magic = header[0];
     caps->project_id = header[1];
     caps->pcb_id = header[2];
@@ -151,36 +280,41 @@ bool eeprom_read_capabilities(uint8_t i2c_addr, eeprom_capabilities_t *caps) {
     caps->reserved[1] = header[5];
     caps->reserved[2] = header[6];
     caps->component_count = header[7];
-    
+
     // Validate magic byte
     if (caps->magic < CAP_MAGIC_MIN || caps->magic > CAP_MAGIC_MAX) {
         ESP_LOGW(TAG, "Invalid magic byte: 0x%02X", caps->magic);
         caps->is_valid = false;
         return false;
     }
-    
-    caps->is_valid = true;
-    
+
+    // Decode timestamp (bytes 8-15, little-endian)
+    uint64_t ts = 0;
+    for (int i = 0; i < 8; i++) {
+        ts |= ((uint64_t)header[CAP_OFFSET_TIMESTAMP + i]) << (8 * i);
+    }
+    caps->timestamp = ts;
+
     // Validate component count
     if (caps->component_count > CAP_MAX_COMPONENTS) {
-        ESP_LOGW(TAG, "Component count too high: %d (max %d)", 
+        ESP_LOGW(TAG, "Component count too high: %d (max %d)",
                  caps->component_count, CAP_MAX_COMPONENTS);
         caps->component_count = CAP_MAX_COMPONENTS;
     }
-    
+
     // Read IC descriptors (4 bytes each)
     if (caps->component_count > 0) {
         size_t ic_data_len = caps->component_count * CAP_BYTES_PER_IC;
         uint8_t *ic_data = malloc(ic_data_len);
-        
+
         if (ic_data == NULL) {
-            ESP_LOGE(TAG, "Failed to allocate %d bytes for IC data", ic_data_len);
+            ESP_LOGE(TAG, "Failed to allocate %zu bytes for IC data", ic_data_len);
             return false;
         }
-        
-        ret = eeprom_read_bytes(i2c_addr, CAP_OFFSET_IC_LIST, 
+
+        ret = eeprom_read_bytes(i2c_addr, CAP_OFFSET_COMPONENTS,
                                  ic_data, ic_data_len);
-        
+
         if (ret == ESP_OK) {
             // Parse IC descriptors
             for (int i = 0; i < caps->component_count; i++) {
@@ -195,55 +329,107 @@ bool eeprom_read_capabilities(uint8_t i2c_addr, eeprom_capabilities_t *caps) {
             free(ic_data);
             return false;
         }
-        
+
         free(ic_data);
     }
-    
+
+    // Read reserved footer (bytes 240-247)
+    ret = eeprom_read_bytes(i2c_addr, CAP_OFFSET_FOOTER,
+                             caps->reserved_footer, sizeof(caps->reserved_footer));
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to read reserved footer from 0x%02X", i2c_addr);
+    }
+
     // Read unique ID
-    eeprom_read_unique_id(i2c_addr, caps->unique_id);
-    
+    if (!eeprom_read_unique_id_unlocked(i2c_addr, caps->unique_id)) {
+        ESP_LOGW(TAG, "Failed to read unique ID from 0x%02X", i2c_addr);
+    }
+
+    // Everything the struct claims to hold has now been read successfully
+    caps->is_valid = true;
+
     ESP_LOGI(TAG, "Read capabilities from 0x%02X: %s PCB v%d.%d, %d components",
-             i2c_addr, eeprom_project_name(caps->project_id), 
+             i2c_addr, eeprom_project_name(caps->project_id),
              caps->pcb_id, caps->revision, caps->component_count);
-    
+
     return true;
 }
 
-bool eeprom_write_capabilities(uint8_t i2c_addr, 
-                                const eeprom_capabilities_t *caps, 
-                                bool force) {
-    if (caps == NULL) {
-        ESP_LOGE(TAG, "NULL capabilities pointer");
-        return false;
+static bool eeprom_write_capabilities_unlocked(uint8_t i2c_addr,
+                                               const eeprom_capabilities_t *caps,
+                                               bool force) {
+    // Check if already programmed. A bus error is NOT "blank": refusing to
+    // write is the only safe response, otherwise a transient glitch would
+    // bypass the overwrite guard.
+    if (!force) {
+        eeprom_prog_state_t state = eeprom_get_prog_state(i2c_addr);
+
+        if (state == EEPROM_STATE_BUS_ERROR) {
+            ESP_LOGE(TAG, "Cannot verify programming state of 0x%02X (bus error) - refusing to write",
+                     i2c_addr);
+            return false;
+        }
+
+        if (state == EEPROM_STATE_PROGRAMMED) {
+            ESP_LOGW(TAG, "EEPROM already programmed at 0x%02X (use force=true to override)",
+                     i2c_addr);
+            return false;
+        }
     }
-    
-    // Check if already programmed
-    if (!force && eeprom_is_programmed(i2c_addr)) {
-        ESP_LOGW(TAG, "EEPROM already programmed at 0x%02X (use force=true to override)", 
-                 i2c_addr);
-        return false;
-    }
-    
+
     // Validate magic byte
     if (caps->magic < CAP_MAGIC_MIN || caps->magic > CAP_MAGIC_MAX) {
-        ESP_LOGE(TAG, "Invalid magic byte: 0x%02X (must be %d-%d)", 
+        ESP_LOGE(TAG, "Invalid magic byte: 0x%02X (must be %d-%d)",
                  caps->magic, CAP_MAGIC_MIN, CAP_MAGIC_MAX);
         return false;
     }
-    
+
     // Validate component count
     if (caps->component_count > CAP_MAX_COMPONENTS) {
-        ESP_LOGE(TAG, "Too many components: %d (max %d)", 
+        ESP_LOGE(TAG, "Too many components: %d (max %d)",
                  caps->component_count, CAP_MAX_COMPONENTS);
         return false;
     }
-    
+
     ESP_LOGI(TAG, "Writing capabilities to 0x%02X: %s PCB v%d.%d, %d components",
              i2c_addr, eeprom_project_name(caps->project_id),
              caps->pcb_id, caps->revision, caps->component_count);
-    
-    // Write header (8 bytes)
-    uint8_t header[8] = {
+
+    // Pack and write IC descriptors first: the header page containing the
+    // magic byte is committed last, so an interrupted write never leaves a
+    // valid-looking magic in front of unwritten descriptors.
+    uint8_t *ic_data = NULL;
+    size_t ic_data_len = 0;
+
+    if (caps->component_count > 0) {
+        ic_data_len = (size_t)caps->component_count * CAP_BYTES_PER_IC;
+        ic_data = malloc(ic_data_len);
+
+        if (ic_data == NULL) {
+            ESP_LOGE(TAG, "Failed to allocate %zu bytes for IC data", ic_data_len);
+            return false;
+        }
+
+        // Pack IC descriptors
+        for (int i = 0; i < caps->component_count; i++) {
+            int offset = i * CAP_BYTES_PER_IC;
+            ic_data[offset] = caps->components[i].category;
+            ic_data[offset + 1] = caps->components[i].id;
+            ic_data[offset + 2] = caps->components[i].i2c_address;
+            ic_data[offset + 3] = caps->components[i].status;
+        }
+
+        esp_err_t ret = eeprom_write_bytes(i2c_addr, CAP_OFFSET_COMPONENTS,
+                                            ic_data, ic_data_len);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to write IC descriptors");
+            free(ic_data);
+            return false;
+        }
+    }
+
+    // Build header image (bytes 0-15): identity plus little-endian timestamp
+    uint8_t header[16] = {
         caps->magic,
         caps->project_id,
         caps->pcb_id,
@@ -253,162 +439,106 @@ bool eeprom_write_capabilities(uint8_t i2c_addr,
         0,  // reserved
         caps->component_count
     };
-    
-    esp_err_t ret = eeprom_write_bytes(i2c_addr, CAP_OFFSET_MAGIC, header, 8);
+    for (int i = 0; i < 8; i++) {
+        header[CAP_OFFSET_TIMESTAMP + i] = (uint8_t)(caps->timestamp >> (8 * i));
+    }
+
+    // Commit order: timestamp page (8-15) first, then the header page (0-7)
+    // containing the magic byte last.
+    esp_err_t ret = eeprom_write_bytes(i2c_addr, CAP_OFFSET_TIMESTAMP,
+                                        &header[CAP_OFFSET_TIMESTAMP], 8);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to write header");
+        ESP_LOGE(TAG, "Failed to write timestamp");
+        free(ic_data);
         return false;
     }
-    
-    // Write IC descriptors (4 bytes each)
-    if (caps->component_count > 0) {
-        size_t ic_data_len = caps->component_count * CAP_BYTES_PER_IC;
-        uint8_t *ic_data = malloc(ic_data_len);
-        
-        if (ic_data == NULL) {
-            ESP_LOGE(TAG, "Failed to allocate %d bytes for IC data", ic_data_len);
+
+    ret = eeprom_write_bytes(i2c_addr, CAP_OFFSET_MAGIC, &header[0], 8);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to write header");
+        free(ic_data);
+        return false;
+    }
+
+    // Read back and verify everything we wrote
+    uint8_t verify_header[16];
+    ret = eeprom_read_bytes(i2c_addr, CAP_OFFSET_MAGIC,
+                             verify_header, sizeof(verify_header));
+    if (ret != ESP_OK || memcmp(verify_header, header, sizeof(header)) != 0) {
+        ESP_LOGE(TAG, "Header read-back verification failed at 0x%02X", i2c_addr);
+        free(ic_data);
+        return false;
+    }
+
+    if (ic_data != NULL) {
+        uint8_t *verify_data = malloc(ic_data_len);
+        if (verify_data == NULL) {
+            ESP_LOGE(TAG, "Failed to allocate %zu bytes for verification", ic_data_len);
+            free(ic_data);
             return false;
         }
-        
-        // Pack IC descriptors
-        for (int i = 0; i < caps->component_count; i++) {
-            int offset = i * CAP_BYTES_PER_IC;
-            ic_data[offset] = caps->components[i].category;
-            ic_data[offset + 1] = caps->components[i].id;
-            ic_data[offset + 2] = caps->components[i].i2c_address;
-            ic_data[offset + 3] = caps->components[i].status;
-        }
-        
-        ret = eeprom_write_bytes(i2c_addr, CAP_OFFSET_IC_LIST, 
-                                  ic_data, ic_data_len);
-        
+
+        ret = eeprom_read_bytes(i2c_addr, CAP_OFFSET_COMPONENTS,
+                                 verify_data, ic_data_len);
+        bool match = (ret == ESP_OK && memcmp(verify_data, ic_data, ic_data_len) == 0);
+
+        free(verify_data);
         free(ic_data);
-        
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to write IC descriptors");
+
+        if (!match) {
+            ESP_LOGE(TAG, "IC descriptor read-back verification failed at 0x%02X",
+                     i2c_addr);
             return false;
         }
     }
-    
+
     ESP_LOGI(TAG, "Successfully wrote capabilities to 0x%02X", i2c_addr);
     return true;
 }
 
-int eeprom_scan_bus(eeprom_capabilities_t *caps, int max_devices) {
-    if (caps == NULL || max_devices <= 0) {
-        return 0;
-    }
-    
-    ESP_LOGI(TAG, "Scanning I2C bus for 24AA02E64 EEPROMs...");
-    
-    int found = 0;
-    
-    for (uint8_t addr = EEPROM_I2C_ADDR_0; 
-         addr <= EEPROM_I2C_ADDR_7 && found < max_devices; 
-         addr++) {
-        
-        if (eeprom_probe(addr)) {
-            ESP_LOGI(TAG, "Found EEPROM at 0x%02X", addr);
-            
-            if (eeprom_is_programmed(addr)) {
-                if (eeprom_read_capabilities(addr, &caps[found])) {
-                    found++;
-                } else {
-                    ESP_LOGW(TAG, "Failed to read capabilities from 0x%02X", addr);
-                }
-            } else {
-                ESP_LOGI(TAG, "EEPROM at 0x%02X is not programmed", addr);
-            }
-        }
-    }
-    
-    ESP_LOGI(TAG, "Scan complete: found %d programmed EEPROM(s)", found);
-    return found;
-}
-
-bool eeprom_has_ic(const eeprom_capabilities_t *caps, 
-                   uint8_t category, uint8_t id) {
-    if (caps == NULL || !caps->is_valid) {
-        return false;
-    }
-    
-    for (int i = 0; i < caps->component_count; i++) {
-        if (caps->components[i].category == category &&
-            caps->components[i].id == id &&
-            caps->components[i].status == IC_STATUS_INSTALLED) {
-            return true;
-        }
-    }
-    
-    return false;
-}
-
-int eeprom_count_category(const eeprom_capabilities_t *caps, uint8_t category) {
-    if (caps == NULL || !caps->is_valid) {
-        return 0;
-    }
-    
-    int count = 0;
-    
-    for (int i = 0; i < caps->component_count; i++) {
-        if (caps->components[i].category == category &&
-            caps->components[i].status == IC_STATUS_INSTALLED) {
-            count++;
-        }
-    }
-    
-    return count;
-}
-
-eeprom_ic_descriptor_t* eeprom_find_category(const eeprom_capabilities_t *caps, 
-                                              uint8_t category) {
-    if (caps == NULL || !caps->is_valid) {
-        return NULL;
-    }
-    
-    for (int i = 0; i < caps->component_count; i++) {
-        if (caps->components[i].category == category &&
-            caps->components[i].status == IC_STATUS_INSTALLED) {
-            return (eeprom_ic_descriptor_t*)&caps->components[i];
-        }
-    }
-    
-    return NULL;
-}
-
-bool eeprom_update_ic_status(uint8_t i2c_addr, 
-                              uint8_t category, uint8_t id, 
-                              uint8_t new_status) {
+/**
+ * @brief Shared implementation for the status update functions
+ *
+ * @param match_addr If true, the descriptor's address byte must also equal
+ *                   ic_address; if false, the first (category, id) match wins.
+ */
+static bool eeprom_update_ic_status_internal(uint8_t i2c_addr,
+                                             uint8_t category, uint8_t id,
+                                             bool match_addr, uint8_t ic_address,
+                                             uint8_t new_status) {
     eeprom_capabilities_t caps;
-    if (!eeprom_read_capabilities(i2c_addr, &caps)) {
+    if (!eeprom_read_capabilities_unlocked(i2c_addr, &caps)) {
         ESP_LOGE(TAG, "Failed to read capabilities");
         return false;
     }
-    
-    bool found = false;
+
     int ic_index = -1;
-    
+
     for (int i = 0; i < caps.component_count; i++) {
         if (caps.components[i].category == category &&
-            caps.components[i].id == id) {
-            found = true;
+            caps.components[i].id == id &&
+            (!match_addr || caps.components[i].i2c_address == ic_address)) {
             ic_index = i;
             break;
         }
     }
-    
-    if (!found) {
-        ESP_LOGW(TAG, "IC not found: category=%d, id=%d", category, id);
+
+    if (ic_index < 0) {
+        if (match_addr) {
+            ESP_LOGW(TAG, "IC not found: category=%d, id=%d, address=0x%02X",
+                     category, id, ic_address);
+        } else {
+            ESP_LOGW(TAG, "IC not found: category=%d, id=%d", category, id);
+        }
         return false;
     }
-    
+
     uint8_t old_status = caps.components[ic_index].status;
-    caps.components[ic_index].status = new_status;
-    
-    uint8_t mem_addr = CAP_OFFSET_IC_LIST + (ic_index * CAP_BYTES_PER_IC) + 3;
-    
+
+    uint8_t mem_addr = CAP_OFFSET_COMPONENTS + (ic_index * CAP_BYTES_PER_IC) + 3;
+
     esp_err_t ret = eeprom_write_bytes(i2c_addr, mem_addr, &new_status, 1);
-    
+
     if (ret == ESP_OK) {
         ESP_LOGI(TAG, "Updated IC status: %s -> %s",
                  eeprom_status_name(old_status),
@@ -418,6 +548,203 @@ bool eeprom_update_ic_status(uint8_t i2c_addr,
         ESP_LOGE(TAG, "Failed to write status byte");
         return false;
     }
+}
+
+// ============================================================================
+// PUBLIC API FUNCTIONS
+// ============================================================================
+
+bool eeprom_is_programmed(uint8_t i2c_addr) {
+    if (!eeprom_check_init()) {
+        return false;
+    }
+
+    eeprom_lock();
+    bool programmed = (eeprom_get_prog_state(i2c_addr) == EEPROM_STATE_PROGRAMMED);
+    eeprom_unlock();
+
+    return programmed;
+}
+
+bool eeprom_read_unique_id(uint8_t i2c_addr, uint8_t *unique_id) {
+    if (unique_id == NULL) {
+        return false;
+    }
+
+    if (!eeprom_check_init()) {
+        return false;
+    }
+
+    eeprom_lock();
+    bool ok = eeprom_read_unique_id_unlocked(i2c_addr, unique_id);
+    eeprom_unlock();
+
+    return ok;
+}
+
+bool eeprom_read_capabilities(uint8_t i2c_addr, eeprom_capabilities_t *caps) {
+    if (caps == NULL) {
+        ESP_LOGE(TAG, "NULL capabilities pointer");
+        return false;
+    }
+
+    if (!eeprom_check_init()) {
+        return false;
+    }
+
+    eeprom_lock();
+    bool ok = eeprom_read_capabilities_unlocked(i2c_addr, caps);
+    eeprom_unlock();
+
+    return ok;
+}
+
+bool eeprom_write_capabilities(uint8_t i2c_addr,
+                                const eeprom_capabilities_t *caps,
+                                bool force) {
+    if (caps == NULL) {
+        ESP_LOGE(TAG, "NULL capabilities pointer");
+        return false;
+    }
+
+    if (!eeprom_check_init()) {
+        return false;
+    }
+
+    eeprom_lock();
+    bool ok = eeprom_write_capabilities_unlocked(i2c_addr, caps, force);
+    eeprom_unlock();
+
+    return ok;
+}
+
+int eeprom_scan_bus(eeprom_capabilities_t *caps, int max_devices) {
+    if (caps == NULL || max_devices <= 0) {
+        return 0;
+    }
+
+    if (!eeprom_check_init()) {
+        return 0;
+    }
+
+    ESP_LOGI(TAG, "Scanning I2C bus for 24AA02E64 EEPROMs...");
+
+    eeprom_lock();
+
+    int found = 0;
+
+    for (uint8_t addr = EEPROM_I2C_ADDR_0;
+         addr <= EEPROM_I2C_ADDR_7 && found < max_devices;
+         addr++) {
+
+        if (eeprom_probe(addr)) {
+            ESP_LOGI(TAG, "Found EEPROM at 0x%02X", addr);
+
+            eeprom_prog_state_t state = eeprom_get_prog_state(addr);
+
+            if (state == EEPROM_STATE_PROGRAMMED) {
+                if (eeprom_read_capabilities_unlocked(addr, &caps[found])) {
+                    if (!eeprom_validate_self_reference(&caps[found])) {
+                        ESP_LOGW(TAG, "Device at 0x%02X has no valid self-reference - foreign EEPROM?",
+                                 addr);
+                    }
+                    found++;
+                } else {
+                    ESP_LOGW(TAG, "Failed to read capabilities from 0x%02X", addr);
+                }
+            } else if (state == EEPROM_STATE_BUS_ERROR) {
+                ESP_LOGW(TAG, "Failed to read magic byte from 0x%02X", addr);
+            } else {
+                ESP_LOGI(TAG, "EEPROM at 0x%02X is not programmed", addr);
+            }
+        }
+    }
+
+    eeprom_unlock();
+
+    ESP_LOGI(TAG, "Scan complete: found %d programmed EEPROM(s)", found);
+    return found;
+}
+
+bool eeprom_has_ic(const eeprom_capabilities_t *caps,
+                   uint8_t category, uint8_t id) {
+    if (caps == NULL || !caps->is_valid) {
+        return false;
+    }
+
+    for (int i = 0; i < caps->component_count; i++) {
+        if (caps->components[i].category == category &&
+            caps->components[i].id == id &&
+            caps->components[i].status == IC_STATUS_INSTALLED) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+int eeprom_count_category(const eeprom_capabilities_t *caps, uint8_t category) {
+    if (caps == NULL || !caps->is_valid) {
+        return 0;
+    }
+
+    int count = 0;
+
+    for (int i = 0; i < caps->component_count; i++) {
+        if (caps->components[i].category == category &&
+            caps->components[i].status == IC_STATUS_INSTALLED) {
+            count++;
+        }
+    }
+
+    return count;
+}
+
+const eeprom_ic_descriptor_t* eeprom_find_category(const eeprom_capabilities_t *caps,
+                                                    uint8_t category) {
+    if (caps == NULL || !caps->is_valid) {
+        return NULL;
+    }
+
+    for (int i = 0; i < caps->component_count; i++) {
+        if (caps->components[i].category == category &&
+            caps->components[i].status == IC_STATUS_INSTALLED) {
+            return &caps->components[i];
+        }
+    }
+
+    return NULL;
+}
+
+bool eeprom_update_ic_status(uint8_t i2c_addr,
+                              uint8_t category, uint8_t id,
+                              uint8_t new_status) {
+    if (!eeprom_check_init()) {
+        return false;
+    }
+
+    eeprom_lock();
+    bool ok = eeprom_update_ic_status_internal(i2c_addr, category, id,
+                                               false, 0, new_status);
+    eeprom_unlock();
+
+    return ok;
+}
+
+bool eeprom_update_ic_status_at(uint8_t i2c_addr,
+                                 uint8_t category, uint8_t id,
+                                 uint8_t ic_address,
+                                 uint8_t new_status) {
+    if (!eeprom_check_init()) {
+        return false;
+    }
+
+    eeprom_lock();
+    bool ok = eeprom_update_ic_status_internal(i2c_addr, category, id,
+                                               true, ic_address, new_status);
+    eeprom_unlock();
+
+    return ok;
 }
 
 // ============================================================================
@@ -468,7 +795,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
     if (ic == NULL) {
         return "NULL";
     }
-    
+
     if (ic->category == CAT_RTC) {
         switch (ic->id) {
             case RTC_MCP79412: return "MCP79412";
@@ -479,7 +806,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case RTC_RV3028:   return "RV3028";
         }
     }
-    
+
     if (ic->category == CAT_GPS) {
         switch (ic->id) {
             case GPS_ZED_F9P: return "ZED-F9P";
@@ -490,7 +817,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case GPS_NEO_7M:  return "NEO-7M";
         }
     }
-    
+
     if (ic->category == CAT_IMU) {
         switch (ic->id) {
             case IMU_ICM20948:  return "ICM-20948";
@@ -501,7 +828,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case IMU_LSM9DS1:   return "LSM9DS1";
         }
     }
-    
+
     if (ic->category == CAT_CRYPTO) {
         switch (ic->id) {
             case CRYPTO_ATECC608C: return "ATECC608C";
@@ -510,7 +837,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case CRYPTO_ATECC508A: return "ATECC508A";
         }
     }
-    
+
     if (ic->category == CAT_DISPLAY) {
         switch (ic->id) {
             case DISPLAY_SSD1306:   return "SSD1306";
@@ -520,7 +847,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case DISPLAY_E_INK_2_9: return "E-Ink 2.9\"";
         }
     }
-    
+
     if (ic->category == CAT_COMM) {
         switch (ic->id) {
             case COMM_ESP32_C6:  return "ESP32-C6";
@@ -530,7 +857,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case COMM_ESP32:     return "ESP32";
         }
     }
-    
+
     if (ic->category == CAT_USB_SERIAL) {
         switch (ic->id) {
             case USB_SERIAL_CP2102:     return "CP2102";
@@ -547,7 +874,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case USB_SERIAL_FT4232H:    return "FT4232H";
         }
     }
-    
+
     if (ic->category == CAT_MOTOR) {
         switch (ic->id) {
             case MOTOR_TB6612:     return "TB6612";
@@ -556,7 +883,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case MOTOR_WAVE_ROVER: return "WAVE ROVER";
         }
     }
-    
+
     if (ic->category == CAT_TEMP) {
         switch (ic->id) {
             case TEMP_MCP9808: return "MCP9808";
@@ -566,7 +893,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case TEMP_SI7021:  return "Si7021";
         }
     }
-    
+
     if (ic->category == CAT_PRESSURE) {
         switch (ic->id) {
             case PRESSURE_BMP280: return "BMP280";
@@ -574,7 +901,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case PRESSURE_MS5611: return "MS5611";
         }
     }
-    
+
     if (ic->category == CAT_SENSOR) {
         switch (ic->id) {
             case SENSOR_TOF_VL53L0X:  return "VL53L0X";
@@ -586,7 +913,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case SENSOR_THERMOCOUPLE_MAX31855: return "MAX31855";
         }
     }
-    
+
     if (ic->category == CAT_AUDIO) {
         switch (ic->id) {
             case AUDIO_MAX98357: return "MAX98357";
@@ -596,7 +923,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case AUDIO_MAX9814:  return "MAX9814";
         }
     }
-    
+
     if (ic->category == CAT_POWER) {
         switch (ic->id) {
             case POWER_INA219:  return "INA219";
@@ -605,7 +932,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case POWER_LTC4150: return "LTC4150";
         }
     }
-    
+
     if (ic->category == CAT_LED) {
         switch (ic->id) {
             case LED_WS2812B:   return "WS2812B";
@@ -621,7 +948,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case LED_AS1107:    return "AS1107";
         }
     }
-    
+
     if (ic->category == CAT_IO_EXPANDER) {
         switch (ic->id) {
             case IO_MCP23008: return "MCP23008";
@@ -630,7 +957,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case IO_PCA9685:  return "PCA9685";
         }
     }
-    
+
     if (ic->category == CAT_MEMORY) {
         switch (ic->id) {
             case MEMORY_24AA02E64: return "24AA02E64";
@@ -640,7 +967,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case MEMORY_W25Q128:   return "W25Q128";
         }
     }
-    
+
     if (ic->category == CAT_MCU) {
         switch (ic->id) {
             case MCU_ESP32_C6: return "ESP32-C6";
@@ -650,7 +977,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case MCU_STM32F4:  return "STM32F4";
         }
     }
-    
+
     if (ic->category == CAT_CONNECTOR) {
         switch (ic->id) {
             case CONNECTOR_USB_UART:      return "USB-UART";
@@ -662,7 +989,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case CONNECTOR_STEMMA_QT:     return "STEMMA QT";
         }
     }
-    
+
     if (ic->category == CAT_BUTTON) {
         switch (ic->id) {
             case BUTTON_RESET:       return "Reset Button";
@@ -673,7 +1000,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case SWITCH_MODE_SELECT: return "Mode Select Switch";
         }
     }
-    
+
     if (ic->category == CAT_BATTERY) {
         switch (ic->id) {
             case BATTERY_LIPO_1S:    return "LiPo 1S";
@@ -684,7 +1011,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case POWER_POE:          return "PoE";
         }
     }
-    
+
     if (ic->category == CAT_ACTUATOR) {
         switch (ic->id) {
             case ACTUATOR_RELAY_SPDT:  return "Relay SPDT";
@@ -694,7 +1021,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case ACTUATOR_BUZZER:      return "Buzzer";
         }
     }
-    
+
     if (ic->category == CAT_ANTENNA) {
         switch (ic->id) {
             case ANTENNA_PCB_2_4GHZ:   return "PCB 2.4GHz";
@@ -703,14 +1030,14 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case ANTENNA_PATCH_GPS:    return "Patch GPS";
         }
     }
-    
+
     if (ic->category == CAT_USB_HUB) {
         switch (ic->id) {
             case USB_HUB_CY7C65621: return "CY7C65621";
             case USB_HUB_CY7C65631: return "CY7C65631";
         }
     }
-    
+
     return "Unknown IC";
 }
 
@@ -732,37 +1059,37 @@ bool eeprom_validate_self_reference(const eeprom_capabilities_t *caps) {
     if (caps == NULL || !caps->is_valid) {
         return false;
     }
-    
+
     if (caps->component_count == 0) {
         ESP_LOGW(TAG, "No components defined - cannot validate self-reference");
         return false;
     }
-    
+
     const eeprom_ic_descriptor_t *first = &caps->components[0];
-    
+
     if (first->category != CAT_MEMORY) {
         ESP_LOGW(TAG, "Component[0] is not MEMORY category (convention: EEPROM should be first)");
         return false;
     }
-    
+
     if (first->id != MEMORY_24AA02E64) {
-        ESP_LOGW(TAG, "Component[0] is not 24AA02E64 (found: %s)", 
+        ESP_LOGW(TAG, "Component[0] is not 24AA02E64 (found: %s)",
                  eeprom_ic_name(first));
         return false;
     }
-    
+
     if (first->i2c_address != caps->i2c_address) {
         ESP_LOGE(TAG, "EEPROM self-reference address mismatch! Says 0x%02X, actually at 0x%02X",
                  first->i2c_address, caps->i2c_address);
         return false;
     }
-    
+
     if (first->status != IC_STATUS_INSTALLED) {
         ESP_LOGW(TAG, "EEPROM self-reference status is not INSTALLED: %s",
                  eeprom_status_name(first->status));
         return false;
     }
-    
+
     ESP_LOGI(TAG, "✓ EEPROM self-reference validated at 0x%02X", caps->i2c_address);
     return true;
 }
@@ -772,19 +1099,19 @@ void eeprom_print_capabilities(const eeprom_capabilities_t *caps) {
         ESP_LOGE(TAG, "NULL capabilities");
         return;
     }
-    
+
     if (!caps->is_valid) {
         ESP_LOGW(TAG, "Invalid capabilities data");
         return;
     }
-    
+
     ESP_LOGI(TAG, "=== EEPROM Capabilities (0x%02X) ===", caps->i2c_address);
     ESP_LOGI(TAG, "Magic:    0x%02X", caps->magic);
-    ESP_LOGI(TAG, "Project:  %s (%d)", eeprom_project_name(caps->project_id), 
+    ESP_LOGI(TAG, "Project:  %s (%d)", eeprom_project_name(caps->project_id),
              caps->project_id);
     ESP_LOGI(TAG, "PCB:      %d", caps->pcb_id);
     ESP_LOGI(TAG, "Revision: %d", caps->revision);
-    
+
     // Display timestamp like kernel compile date
     if (caps->timestamp > 0) {
         time_t ts = (time_t)caps->timestamp;
@@ -792,21 +1119,21 @@ void eeprom_print_capabilities(const eeprom_capabilities_t *caps) {
         gmtime_r(&ts, &timeinfo);
         char time_str[64];
         strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S UTC", &timeinfo);
-        ESP_LOGI(TAG, "Programmed: %s (timestamp: %llu)", time_str, caps->timestamp);
+        ESP_LOGI(TAG, "Programmed: %s (timestamp: %" PRIu64 ")", time_str, caps->timestamp);
     } else {
         ESP_LOGI(TAG, "Programmed: [timestamp not set]");
     }
-    
+
     ESP_LOGI(TAG, "Unique ID: %02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X",
-             caps->unique_id[0], caps->unique_id[1], caps->unique_id[2], 
-             caps->unique_id[3], caps->unique_id[4], caps->unique_id[5], 
+             caps->unique_id[0], caps->unique_id[1], caps->unique_id[2],
+             caps->unique_id[3], caps->unique_id[4], caps->unique_id[5],
              caps->unique_id[6], caps->unique_id[7]);
-    
+
     ESP_LOGI(TAG, "Components: %d", caps->component_count);
-    
+
     for (int i = 0; i < caps->component_count; i++) {
         const eeprom_ic_descriptor_t *ic = &caps->components[i];
-        
+
         ESP_LOGI(TAG, "  [%2d] %-12s %-15s I2C:0x%02X Status:%s",
                  i,
                  eeprom_category_name(ic->category),
@@ -814,6 +1141,6 @@ void eeprom_print_capabilities(const eeprom_capabilities_t *caps) {
                  ic->i2c_address,
                  eeprom_status_name(ic->status));
     }
-    
+
     ESP_LOGI(TAG, "====================================");
 }

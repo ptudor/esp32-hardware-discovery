@@ -7,9 +7,10 @@ ESP-IDF managed component for hardware capability discovery using 4-byte IC desc
 - **4-byte IC descriptors**: `[category][id][i2c_address][status]`
 - **Runtime hardware discovery**: Know exactly what's on your PCB
 - **Field-updateable status**: Mark failed components without full reprogram
-- **60 IC capacity**: 240 bytes for component data
+- **56 IC capacity**: 224 bytes for component data
 - **Unique 64-bit ID**: Factory-programmed unique identifier
 - **Multiple projects**: Support different PCB variants
+- **Thread-safe**: All bus operations serialized by an internal mutex
 
 ## Installation
 
@@ -24,7 +25,7 @@ dependencies:
 ### Manual Installation
 ```bash
 cd your-project/components
-git clone https://github.com/ptudor/esp_hardware_discovery.git
+git clone https://github.com/ptudor/esp32-hardware-discovery.git
 ```
 
 ## Quick Start
@@ -34,19 +35,26 @@ git clone https://github.com/ptudor/esp_hardware_discovery.git
 #include "esp_hardware_discovery.h"
 ```
 
-### 2. Initialize I2C
+### 2. Initialize I2C and the Discovery Module
 ```c
-i2c_config_t conf = {
-    .mode = I2C_MODE_MASTER,
+#include "driver/i2c_master.h"
+
+i2c_master_bus_config_t bus_config = {
+    .i2c_port = -1,                     // Auto-select
     .sda_io_num = GPIO_NUM_21,
     .scl_io_num = GPIO_NUM_22,
-    .sda_pullup_en = GPIO_PULLUP_ENABLE,
-    .scl_pullup_en = GPIO_PULLUP_ENABLE,
-    .master.clk_speed = 100000,
+    .clk_source = I2C_CLK_SRC_DEFAULT,
+    .glitch_ignore_cnt = 7,
+    .flags.enable_internal_pullup = true,
 };
-i2c_param_config(I2C_NUM_0, &conf);
-i2c_driver_install(I2C_NUM_0, conf.mode, 0, 0, 0);
+i2c_master_bus_handle_t bus = NULL;
+ESP_ERROR_CHECK(i2c_new_master_bus(&bus_config, &bus));
+ESP_ERROR_CHECK(eeprom_discovery_init(bus));
 ```
+
+`eeprom_discovery_init()` must be called once before any function that
+touches the bus. The EEPROM device is clocked at 100 kHz by default;
+define `EEPROM_DISCOVERY_I2C_SPEED_HZ` at compile time to override.
 
 ### 3. Manufacturing - Program Board
 ```c
@@ -55,7 +63,8 @@ eeprom_capabilities_t caps = {
     .project_id = PROJECT_GNSS,
     .pcb_id = GNSS_PCB_MAIN,
     .revision = 1,
-    .component_count = 5
+    .component_count = 5,
+    .timestamp = (uint64_t)time(NULL)   // Programming time, stored on-chip
 };
 
 // Define components with EEPROM self-reference as first entry
@@ -150,7 +159,7 @@ Header (16 bytes):
   Byte 3:       Revision
   Bytes 4-6:    Reserved (future: CRC, flags, extended count)
   Byte 7:       Component count (N, max 56)
-  Bytes 8-15:   64-bit Unix timestamp (when programmed)
+  Bytes 8-15:   64-bit Unix timestamp, little-endian (when programmed)
 
 Components (224 bytes):
   Bytes 16-239: N × 4-byte IC descriptors (max 56 components)
@@ -216,6 +225,11 @@ eeprom_update_ic_status(EEPROM_I2C_ADDR_0, CAT_IMU, IMU_ICM20948, IC_STATUS_FAIL
 
 ## API Reference
 
+### Initialization
+```c
+esp_err_t eeprom_discovery_init(i2c_master_bus_handle_t bus_handle);
+```
+
 ### Core Functions
 ```c
 bool eeprom_is_programmed(uint8_t i2c_addr);
@@ -229,12 +243,17 @@ int eeprom_scan_bus(eeprom_capabilities_t *caps, int max_devices);
 ```c
 bool eeprom_has_ic(const eeprom_capabilities_t *caps, uint8_t category, uint8_t id);
 int eeprom_count_category(const eeprom_capabilities_t *caps, uint8_t category);
-eeprom_ic_descriptor_t* eeprom_find_category(const eeprom_capabilities_t *caps, uint8_t category);
+const eeprom_ic_descriptor_t* eeprom_find_category(const eeprom_capabilities_t *caps, uint8_t category);
 ```
 
 ### Field Update
 ```c
+// Updates the FIRST descriptor matching (category, id)
 bool eeprom_update_ic_status(uint8_t i2c_addr, uint8_t category, uint8_t id, uint8_t new_status);
+
+// Also matches the address byte - for boards with two identical parts
+bool eeprom_update_ic_status_at(uint8_t i2c_addr, uint8_t category, uint8_t id,
+                                uint8_t ic_address, uint8_t new_status);
 ```
 
 ### Utilities
@@ -279,7 +298,7 @@ Each category supports 255 unique IC IDs.
 ESP32, ESP32-S2, ESP32-S3, ESP32-C2, ESP32-C3, ESP32-C6, ESP32-H2
 
 ### Framework
-ESP-IDF >= 5.0.0
+ESP-IDF >= 5.2.0 (uses the `i2c_master` driver API)
 
 ## File Structure
 
@@ -289,10 +308,13 @@ esp32-hardware-discovery/
 │   └── esp_hardware_discovery.h    # Public API and type definitions
 ├── src/
 │   └── esp_hardware_discovery.c    # Implementation
-├── esp_hardware_discovery_examples.c  # Usage examples
+├── test/
+│   └── host/                       # Host-side unit tests (mock I2C, no ESP-IDF needed)
+├── esp_hardware_discovery_examples.c  # Usage examples (reference only)
 ├── CMakeLists.txt                  # ESP-IDF component registration
 ├── idf_component.yml               # ESP Component Registry metadata
 ├── README.md                       # User documentation
+├── OVERVIEW.md                     # Architecture summary
 ├── CHANGELOG.md                    # Version history
 ├── LICENSE.txt                     # MIT License
 └── CLAUDE.md                       # AI assistant context

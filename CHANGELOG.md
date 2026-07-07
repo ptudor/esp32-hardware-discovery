@@ -12,11 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 4-byte IC descriptor format: [category][id][i2c_address][status]
 - 23 component categories (RTC, GPS, IMU, CRYPTO, DISPLAY, COMM, USB_SERIAL, MOTOR, TEMP, PRESSURE, SENSOR, AUDIO, POWER, LED, IO_EXPANDER, MEMORY, MCU, CONNECTOR, BUTTON, BATTERY, ACTUATOR, ANTENNA, MISC)
 - EEPROM self-reference validation (component[0])
-- 60 component capacity per board
+- 56 component capacity per board
 - Field-updateable status (7 status codes)
 - Reserved bytes (4-6) for future features
-- Manufacturing programmer with LED feedback
-- Self-provisioning module for first-boot auto-configuration
 - Creative address field usage (I2C addr / GPIO pin / PWM channel)
 - Complete API: read, write, query, validate, field update
 - Bus scanning for multiple EEPROMs
@@ -40,6 +38,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - MIDI (Audio hardware)
 
 ## [Unreleased]
+
+### Changed (pre-release fixes from code review; 1.0.0 was never deployed)
+- BREAKING: migrated from the deprecated legacy `driver/i2c.h` API to the
+  `i2c_master` driver; `eeprom_discovery_init(bus_handle)` must now be called
+  once before any bus operation (requires ESP-IDF >= 5.2)
+- BREAKING: `eeprom_find_category()` now returns `const eeprom_ic_descriptor_t*`
+- Component descriptors are stored at byte 16 per the documented memory map,
+  and the 64-bit little-endian timestamp at bytes 8-15 is now actually
+  persisted and read back (set `caps->timestamp` before writing)
+- EEPROM writes are chunked to the 24AA02E64's 8-byte page buffer with ACK
+  polling after each page (previously, writes of 3+ components were corrupted
+  by intra-page wraparound)
+- `eeprom_write_capabilities()` commits the header page (magic byte) last and
+  verifies the whole image by read-back, so an interrupted write never leaves
+  a valid-looking record; with `force=false`, a bus error during the guard
+  check now refuses to write instead of being treated as "blank"
+- `eeprom_read_capabilities()` sets `is_valid` only after every read succeeds,
+  populates `reserved_footer` from bytes 240-247, and warns when the unique-ID
+  read fails
+- All bus-touching functions are serialized by an internal mutex (thread-safe
+  after init)
+- Low-level accesses are bounds-checked against the 256-byte array, and writes
+  overlapping the factory unique-ID region (0xF8-0xFF) are rejected
+- Fixed the `IC()` helper macro, whose `id` parameter captured the `.id`
+  designator and made every `IC_*` macro fail to compile
+
+### Added
+- `eeprom_update_ic_status_at()` - address-qualified status update for boards
+  carrying two identical parts (the legacy function documents first-match)
+- Scan now validates each device's self-reference and warns about foreign
+  EEPROMs in the 0x50-0x57 range
+- Host-side unit test suite under `test/host` (mock I2C with faithful
+  page-buffer semantics, fault injection, and concurrency checks)
+- OVERVIEW.md architecture summary
+
+### Removed
+- `CAP_COMPONENT_SIZE` macro (unused duplicate of `CAP_BYTES_PER_IC`);
+  `CAP_OFFSET_IC_LIST` is retained as a deprecated alias of
+  `CAP_OFFSET_COMPONENTS`
 
 ### Planned Features
 - CRC8 checksum in reserved byte 4

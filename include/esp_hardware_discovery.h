@@ -8,8 +8,12 @@
  * - ID: Specific chip within category
  * - I2C Address: Where to find it (0 if not I2C) - creative use for GPIO pins, PWM channels, etc
  * - Status: Installed/failed/unpopulated (field-updateable!)
- * 
+ *
  * CRITICAL CONVENTION: components[0] should ALWAYS be the EEPROM itself for sanity checking
+ *
+ * USAGE: Create an I2C master bus, then call eeprom_discovery_init() once before
+ * any function that touches the bus. After initialization, all bus-touching
+ * functions are thread-safe (serialized by an internal mutex).
  */
 
 #ifndef ESP_HARDWARE_DISCOVERY_H
@@ -17,6 +21,8 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "esp_err.h"
+#include "driver/i2c_master.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -39,6 +45,12 @@ extern "C" {
 #define EEPROM_I2C_ADDR_6           0x56
 #define EEPROM_I2C_ADDR_7           0x57
 
+// I2C bus speed used for the EEPROM device (Hz). The 24AA02E64 supports
+// 100 kHz and 400 kHz. Override at compile time if needed.
+#ifndef EEPROM_DISCOVERY_I2C_SPEED_HZ
+#define EEPROM_DISCOVERY_I2C_SPEED_HZ   100000
+#endif
+
 // ============================================================================
 // MEMORY LAYOUT (256 bytes total)
 // ============================================================================
@@ -50,7 +62,7 @@ extern "C" {
 // Byte 3:       Revision
 // Bytes 4-6:    Reserved (0) - Future use: checksum, flags, extended features
 // Byte 7:       Component count (N, max 56)
-// Bytes 8-15:   64-bit Unix timestamp (when programmed)
+// Bytes 8-15:   64-bit Unix timestamp, little-endian (when programmed)
 //
 // COMPONENTS (224 bytes):
 // Bytes 16-239: N × 4-byte IC descriptors (max 56 components)
@@ -68,17 +80,20 @@ extern "C" {
 #define CAP_OFFSET_RESERVED_2   5       // Reserved for future: Feature flags?
 #define CAP_OFFSET_RESERVED_3   6       // Reserved for future: Extended count?
 #define CAP_OFFSET_IC_COUNT     7
-#define CAP_OFFSET_TIMESTAMP    8       // 64-bit Unix timestamp (8 bytes)
+#define CAP_OFFSET_TIMESTAMP    8       // 64-bit Unix timestamp, little-endian (8 bytes)
 #define CAP_OFFSET_COMPONENTS   16      // Start of component array
 
 #define CAP_MAX_COMPONENTS      56      // (240-16)/4 = 56 component slots
 #define CAP_BYTES_PER_IC        4       // [cat][id][addr][status]
-#define CAP_COMPONENT_SIZE      4       // Each component = 4 bytes
 
-#define CAP_OFFSET_FOOTER       240     // Reserved footer space (8 bytes)
+#define CAP_OFFSET_FOOTER       240     // Reserved footer bytes 240-247 (8 bytes);
+                                        // full footer region incl. unique ID is 240-255
 #define EEPROM_UNIQUE_ID_START  248     // Factory unique ID (8 bytes)
 #define EEPROM_UNIQUE_ID_SIZE   8
-#define CAP_OFFSET_IC_LIST      8
+
+// DEPRECATED: legacy alias from a pre-release layout where components started
+// at byte 8. Use CAP_OFFSET_COMPONENTS. Will be removed in a future version.
+#define CAP_OFFSET_IC_LIST      CAP_OFFSET_COMPONENTS
 
 // Magic byte
 #define CAP_MAGIC_MIN           1
@@ -438,12 +453,13 @@ typedef struct {
     // Components
     uint8_t component_count;
     uint64_t timestamp;          // Unix timestamp when programmed
+                                 // (persisted at bytes 8-15, little-endian)
     eeprom_ic_descriptor_t components[CAP_MAX_COMPONENTS];
-    
+
     // Unique ID (read separately from factory area)
     uint8_t unique_id[8];
-    
-    // Reserved footer (random from QA testing)
+
+    // Reserved footer (random from QA testing; populated from bytes 240-247 on read)
     uint8_t reserved_footer[8];
     
     // Runtime
@@ -456,8 +472,9 @@ typedef struct {
 // ============================================================================
 
 // Create IC descriptor: IC(category, id, i2c_addr, status)
-#define IC(cat, id, addr, stat) \
-    ((eeprom_ic_descriptor_t){.category=(cat), .id=(id), .i2c_address=(addr), .status=(stat)})
+// (The id parameter is named ic_id so it cannot capture the .id designator.)
+#define IC(cat, ic_id, addr, stat) \
+    ((eeprom_ic_descriptor_t){.category=(cat), .id=(ic_id), .i2c_address=(addr), .status=(stat)})
 
 // Convenience for installed I2C devices
 #define IC_I2C(cat, id, addr) \
@@ -487,14 +504,44 @@ typedef struct {
 // FUNCTION PROTOTYPES
 // ============================================================================
 
+/**
+ * @brief Initialize the discovery module
+ *
+ * Must be called once before any function that touches the I2C bus.
+ * Creates the internal mutex: after successful initialization, every
+ * bus-touching function in this module is thread-safe.
+ *
+ * @param bus_handle Handle of an already-created I2C master bus
+ * @return ESP_OK on success, ESP_ERR_INVALID_ARG if bus_handle is NULL,
+ *         ESP_ERR_INVALID_STATE if already initialized, ESP_ERR_NO_MEM
+ */
+esp_err_t eeprom_discovery_init(i2c_master_bus_handle_t bus_handle);
+
 bool eeprom_is_programmed(uint8_t i2c_addr);
 
 bool eeprom_read_capabilities(uint8_t i2c_addr, eeprom_capabilities_t *caps);
 
 bool eeprom_read_unique_id(uint8_t i2c_addr, uint8_t *unique_id);
 
-bool eeprom_write_capabilities(uint8_t i2c_addr, 
-                                const eeprom_capabilities_t *caps, 
+/**
+ * @brief Write capabilities to the EEPROM
+ *
+ * Set caps->timestamp (Unix seconds) before calling if you want the
+ * programming time recorded; it is stored little-endian at bytes 8-15.
+ *
+ * Commit order: component descriptors and timestamp are written first, the
+ * header page containing the magic byte is written last, and everything is
+ * verified by read-back. An interrupted write therefore never leaves a
+ * valid-looking magic byte in front of unwritten descriptors. Note that when
+ * force-reprogramming an already-programmed EEPROM, the old header remains
+ * valid until the final page is committed.
+ *
+ * @param force Overwrite even if the EEPROM is already programmed. With
+ *              force=false, a bus error during the guard check aborts the
+ *              write (it is never treated as "blank").
+ */
+bool eeprom_write_capabilities(uint8_t i2c_addr,
+                                const eeprom_capabilities_t *caps,
                                 bool force);
 
 int eeprom_scan_bus(eeprom_capabilities_t *caps, int max_devices);
@@ -502,20 +549,38 @@ int eeprom_scan_bus(eeprom_capabilities_t *caps, int max_devices);
 void eeprom_print_capabilities(const eeprom_capabilities_t *caps);
 
 // Check if specific IC is present AND installed
-bool eeprom_has_ic(const eeprom_capabilities_t *caps, 
+bool eeprom_has_ic(const eeprom_capabilities_t *caps,
                    uint8_t category, uint8_t id);
 
 // Count installed ICs in category (status = INSTALLED)
 int eeprom_count_category(const eeprom_capabilities_t *caps, uint8_t category);
 
 // Find first installed IC in category
-eeprom_ic_descriptor_t* eeprom_find_category(const eeprom_capabilities_t *caps, 
-                                              uint8_t category);
+const eeprom_ic_descriptor_t* eeprom_find_category(const eeprom_capabilities_t *caps,
+                                                    uint8_t category);
 
-// Update status of specific IC (useful for field updates!)
-bool eeprom_update_ic_status(uint8_t i2c_addr, 
-                              uint8_t category, uint8_t id, 
+/**
+ * @brief Update status of specific IC (useful for field updates!)
+ *
+ * Updates the FIRST descriptor matching (category, id). If a board carries
+ * two identical parts (same category and id at different addresses), use
+ * eeprom_update_ic_status_at() to disambiguate.
+ */
+bool eeprom_update_ic_status(uint8_t i2c_addr,
+                              uint8_t category, uint8_t id,
                               uint8_t new_status);
+
+/**
+ * @brief Update status of the IC matching (category, id, address)
+ *
+ * Like eeprom_update_ic_status(), but also matches the descriptor's
+ * address byte (I2C address / GPIO pin / PWM channel), so boards with two
+ * identical parts can target the right one.
+ */
+bool eeprom_update_ic_status_at(uint8_t i2c_addr,
+                                 uint8_t category, uint8_t id,
+                                 uint8_t ic_address,
+                                 uint8_t new_status);
 
 // Get name strings
 const char* eeprom_project_name(uint8_t project_id);

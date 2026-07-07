@@ -6,7 +6,7 @@ documentation: https://www.ptudor.net/esp-idf/esp_hardware_discovery/README.html
 
 dependencies:
   idf:
-    version: ">=5.0.0"
+    version: ">=5.2.0"
 
 targets:
   - esp32

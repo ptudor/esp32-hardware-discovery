@@ -1,11 +1,17 @@
 /**
- * @file eeprom_examples.c
+ * @file esp_hardware_discovery_examples.c
  * @brief Usage examples for 24AA02E64 capability discovery
+ *
+ * Reference only - this file is not compiled as part of the component.
+ * Copy the pieces you need into your application (it defines app_main,
+ * so it cannot be added to the component's SRCS as-is).
  */
 
-#include "eeprom_24aa02e64.h"
+#include "esp_hardware_discovery.h"
 #include "esp_log.h"
-#include "driver/i2c.h"
+#include "driver/i2c_master.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 static const char *TAG = "EEPROM_EXAMPLES";
 
@@ -22,26 +28,32 @@ void example_program_shepherd_rover(void) {
         .pcb_id = SHEPHERD_PCB_ROVER,
         .revision = 1,
         .reserved = {0, 0, 0},
-        .component_count = 6,
+        .component_count = 7,
         .i2c_address = EEPROM_I2C_ADDR_0
     };
-    
+
     // Define components on this board
-    caps.components[0] = IC_I2C(CAT_RTC, RTC_MCP79412, 0x6F);
-    caps.components[1] = IC_INSTALLED(CAT_GPS, GPS_ZED_F9P);           // UART
-    caps.components[2] = IC_I2C(CAT_IMU, IMU_ICM20948, 0x68);
-    caps.components[3] = IC_I2C(CAT_CRYPTO, CRYPTO_ATECC608C, 0xC0);
-    caps.components[4] = IC_I2C(CAT_TEMP, TEMP_MCP9808, 0x18);
-    caps.components[5] = IC_INSTALLED(CAT_LED, LED_WS2812B);           // GPIO
-    
+    // CRITICAL CONVENTION: components[0] is ALWAYS the EEPROM itself
+    caps.components[0] = IC_EEPROM_SELF(EEPROM_I2C_ADDR_0);
+    caps.components[1] = IC_I2C(CAT_RTC, RTC_MCP79412, 0x6F);
+    caps.components[2] = IC_INSTALLED(CAT_GPS, GPS_ZED_F9P);           // UART
+    caps.components[3] = IC_I2C(CAT_IMU, IMU_ICM20948, 0x68);
+    caps.components[4] = IC_I2C(CAT_CRYPTO, CRYPTO_ATECC608C, 0xC0);
+    caps.components[5] = IC_I2C(CAT_TEMP, TEMP_MCP9808, 0x18);
+    caps.components[6] = IC_INSTALLED(CAT_LED, LED_WS2812B);           // GPIO
+
     // Write to EEPROM
     if (eeprom_write_capabilities(EEPROM_I2C_ADDR_0, &caps, false)) {
         ESP_LOGI(TAG, "✓ Board programmed successfully");
-        
+
         // Verify
         eeprom_capabilities_t verify;
         if (eeprom_read_capabilities(EEPROM_I2C_ADDR_0, &verify)) {
             eeprom_print_capabilities(&verify);
+
+            if (!eeprom_validate_self_reference(&verify)) {
+                ESP_LOGW(TAG, "Self-reference validation failed");
+            }
         }
     } else {
         ESP_LOGE(TAG, "✗ Failed to program board");
@@ -68,7 +80,8 @@ void example_runtime_discovery(void) {
              caps.pcb_id, caps.revision);
     
     // Initialize components based on discovery
-    for (int i = 0; i < caps.component_count; i++) {
+    // Start at 1: components[0] is the EEPROM itself
+    for (int i = 1; i < caps.component_count; i++) {
         eeprom_ic_descriptor_t *ic = &caps.components[i];
         
         // Skip if not installed
@@ -221,16 +234,18 @@ void example_dual_rtc_board(void) {
     
     eeprom_capabilities_t caps = {
         .magic = CAP_MAGIC_PREFERRED,
-        .project_id = PROJECT_GALMON,
-        .pcb_id = GALMON_PCB_MAIN,
+        .project_id = PROJECT_GNSS,
+        .pcb_id = GNSS_PCB_MAIN,
         .revision = 2,
-        .component_count = 3
+        .component_count = 4
     };
-    
+
+    // CRITICAL CONVENTION: components[0] is ALWAYS the EEPROM itself
+    caps.components[0] = IC_EEPROM_SELF(EEPROM_I2C_ADDR_0);
     // Two different RTCs at different addresses
-    caps.components[0] = IC_I2C(CAT_RTC, RTC_MCP79412, 0x6F);  // Primary
-    caps.components[1] = IC_I2C(CAT_RTC, RTC_DS3231, 0x68);    // Backup
-    caps.components[2] = IC_I2C(CAT_GPS, GPS_ZED_F9P, 0x42);
+    caps.components[1] = IC_I2C(CAT_RTC, RTC_MCP79412, 0x6F);  // Primary
+    caps.components[2] = IC_I2C(CAT_RTC, RTC_DS3231, 0x68);    // Backup
+    caps.components[3] = IC_I2C(CAT_GPS, GPS_ZED_F9P, 0x42);
     
     ESP_LOGI(TAG, "Board has dual RTC configuration:");
     ESP_LOGI(TAG, "  Primary: MCP79412 at 0x6F");
@@ -250,7 +265,7 @@ void example_old_stock_crypto(void) {
     }
     
     // Find crypto chip
-    eeprom_ic_descriptor_t *crypto = eeprom_find_category(&caps, CAT_CRYPTO);
+    const eeprom_ic_descriptor_t *crypto = eeprom_find_category(&caps, CAT_CRYPTO);
     
     if (crypto == NULL) {
         ESP_LOGW(TAG, "No crypto chip found");
@@ -388,10 +403,27 @@ esp_err_t initialize_hardware_from_eeprom(void) {
 // Main Function (for testing)
 // ============================================================================
 
+#define EXAMPLE_I2C_PORT    (-1)    // Auto-select
+#define EXAMPLE_SDA_PIN     21
+#define EXAMPLE_SCL_PIN     22
+
 void app_main(void) {
     ESP_LOGI(TAG, "EEPROM Capability Discovery Examples");
     ESP_LOGI(TAG, "======================================");
-    
+
+    // Create the I2C master bus and initialize the discovery module
+    i2c_master_bus_config_t bus_config = {
+        .i2c_port = EXAMPLE_I2C_PORT,
+        .sda_io_num = EXAMPLE_SDA_PIN,
+        .scl_io_num = EXAMPLE_SCL_PIN,
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .glitch_ignore_cnt = 7,
+        .flags.enable_internal_pullup = true,
+    };
+    i2c_master_bus_handle_t bus = NULL;
+    ESP_ERROR_CHECK(i2c_new_master_bus(&bus_config, &bus));
+    ESP_ERROR_CHECK(eeprom_discovery_init(bus));
+
     // Run examples
     example_program_shepherd_rover();
     vTaskDelay(pdMS_TO_TICKS(1000));
