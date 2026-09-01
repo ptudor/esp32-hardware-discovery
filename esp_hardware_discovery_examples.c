@@ -1,6 +1,6 @@
 /**
  * @file esp_hardware_discovery_examples.c
- * @brief Usage examples for 24AA02E64 capability discovery
+ * @brief Usage examples for 24AA02E64/24AA025E64 capability discovery
  *
  * Reference only - this file is not compiled as part of the component.
  * Copy the pieces you need into your application (it defines app_main,
@@ -34,11 +34,13 @@ void example_program_shepherd_rover(void) {
 
     // Define components on this board
     // CRITICAL CONVENTION: components[0] is ALWAYS the EEPROM itself
-    caps.components[0] = IC_EEPROM_SELF(EEPROM_I2C_ADDR_0);
+    // MCP79412 also exposes EEPROM/EUI at fixed address 0x57, so this board
+    // requires the addressable manifest EEPROM strapped to 0x50.
+    caps.components[0] = IC_EEPROM_SELF_24AA025E64(EEPROM_I2C_ADDR_0);
     caps.components[1] = IC_I2C(CAT_RTC, RTC_MCP79412, 0x6F);
     caps.components[2] = IC_INSTALLED(CAT_GPS, GPS_ZED_F9P);           // UART
     caps.components[3] = IC_I2C(CAT_IMU, IMU_ICM20948, 0x68);
-    caps.components[4] = IC_I2C(CAT_CRYPTO, CRYPTO_ATECC608C, 0xC0);
+    caps.components[4] = IC_I2C(CAT_CRYPTO, CRYPTO_ATECC608C, 0x60);
     caps.components[5] = IC_I2C(CAT_TEMP, TEMP_MCP9808, 0x18);
     caps.components[6] = IC_INSTALLED(CAT_LED, LED_WS2812B);           // GPIO
 
@@ -241,7 +243,8 @@ void example_dual_rtc_board(void) {
     };
 
     // CRITICAL CONVENTION: components[0] is ALWAYS the EEPROM itself
-    caps.components[0] = IC_EEPROM_SELF(EEPROM_I2C_ADDR_0);
+    // MCP79412's EEPROM/EUI occupies 0x57; use the addressable variant.
+    caps.components[0] = IC_EEPROM_SELF_24AA025E64(EEPROM_I2C_ADDR_0);
     // Two different RTCs at different addresses
     caps.components[1] = IC_I2C(CAT_RTC, RTC_MCP79412, 0x6F);  // Primary
     caps.components[2] = IC_I2C(CAT_RTC, RTC_DS3231, 0x68);    // Backup

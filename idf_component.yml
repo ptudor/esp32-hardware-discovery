@@ -1,6 +1,6 @@
 # idf_component.yml
 version: "1.0.0"
-description: Hardware capability discovery using 24AA02E64 EEPROM with 4-byte IC descriptors
+description: Hardware discovery using 24AA02E64/24AA025E64 EEPROMs and 4-byte IC descriptors
 url: https://www.ptudor.net/esp-idf/esp_hardware_discovery
 documentation: https://www.ptudor.net/esp-idf/esp_hardware_discovery/README.html
 

@@ -1,7 +1,7 @@
 /**
  * Host-side unit tests for esp_hardware_discovery, driven through a simulated
- * 24AA02E64 (see mock_i2c.c). Each test function is named for the REVIEW.md
- * finding it verifies.
+ * 24AA02E64/24AA025E64 family (see mock_i2c.c). Each test function is named
+ * for the REVIEW.md finding it verifies.
  *
  * The implementation file is #included directly so its static functions
  * (eeprom_write_bytes / eeprom_read_bytes bounds checks) are testable.
@@ -51,6 +51,10 @@ static void make_test_board(eeprom_capabilities_t *caps) {
     caps->components[4] = IC_I2C(CAT_TEMP, TEMP_MCP9808, 0x19);
 }
 
+static void use_addressable_manifest_eeprom(eeprom_capabilities_t *caps) {
+    caps->components[0] = IC_EEPROM_SELF_24AA025E64(caps->i2c_address);
+}
+
 /** Program the standard board onto a present, erased device at 0x50. */
 static void program_test_board(void) {
     eeprom_capabilities_t caps;
@@ -77,6 +81,8 @@ static void test_r009_uninitialized_and_init(void) {
     make_test_board(&caps);
 
     CHECK(eeprom_is_programmed(EEPROM_I2C_ADDR_0) == false);
+    CHECK(eeprom_get_program_state(EEPROM_I2C_ADDR_0) ==
+          EEPROM_PROGRAM_STATE_BUS_ERROR);
     CHECK(eeprom_read_capabilities(EEPROM_I2C_ADDR_0, &caps) == false);
     CHECK(eeprom_write_capabilities(EEPROM_I2C_ADDR_0, &caps, false) == false);
     CHECK(eeprom_read_unique_id(EEPROM_I2C_ADDR_0, uid) == false);
@@ -219,6 +225,9 @@ static void test_r003_guard(void) {
 
     program_test_board();
 
+    CHECK(eeprom_get_program_state(EEPROM_I2C_ADDR_0) ==
+          EEPROM_PROGRAM_STATE_PROGRAMMED);
+
     eeprom_capabilities_t caps;
     make_test_board(&caps);
 
@@ -229,12 +238,65 @@ static void test_r003_guard(void) {
 
     // Bus error while reading the magic byte must NOT count as "blank".
     mock_fail_receive_at_memaddr(CAP_OFFSET_MAGIC);
+    CHECK(eeprom_get_program_state(EEPROM_I2C_ADDR_0) ==
+          EEPROM_PROGRAM_STATE_BUS_ERROR);
+    mock_fail_receive_at_memaddr(CAP_OFFSET_MAGIC);
     CHECK(eeprom_write_capabilities(EEPROM_I2C_ADDR_0, &caps, false) == false);
     CHECK(mock_write_txn_count() == txns_before);
 
     // Data intact, and force=true still allows a deliberate reprogram.
     CHECK(eeprom_is_programmed(EEPROM_I2C_ADDR_0) == true);
     CHECK(eeprom_write_capabilities(EEPROM_I2C_ADDR_0, &caps, true) == true);
+}
+
+static void test_program_state_blank(void) {
+    TEST_BEGIN("program state distinguishes blank, partial image, and bus error");
+
+    mock_reset();
+    mock_set_present(EEPROM_I2C_ADDR_0, true);
+    CHECK(eeprom_get_program_state(EEPROM_I2C_ADDR_0) ==
+          EEPROM_PROGRAM_STATE_BLANK);
+    CHECK(!eeprom_is_programmed(EEPROM_I2C_ADDR_0));
+
+    // A magic byte that still looks erased is not permission to overwrite
+    // descriptor data left by an interrupted or partial operation.
+    mock_mem(EEPROM_I2C_ADDR_0)[CAP_OFFSET_COMPONENTS] = CAT_GPS;
+    CHECK(eeprom_get_program_state(EEPROM_I2C_ADDR_0) ==
+          EEPROM_PROGRAM_STATE_INVALID);
+    eeprom_capabilities_t caps;
+    make_test_board(&caps);
+    int txns_before = mock_write_txn_count();
+    CHECK(!eeprom_write_capabilities(EEPROM_I2C_ADDR_0, &caps, false));
+    CHECK(mock_write_txn_count() == txns_before);
+
+    // 0x00 is the alternate documented blank fill.
+    memset(mock_mem(EEPROM_I2C_ADDR_0), 0, EEPROM_24AAXXE64_WRITABLE_SIZE);
+    CHECK(eeprom_get_program_state(EEPROM_I2C_ADDR_0) ==
+          EEPROM_PROGRAM_STATE_BLANK);
+}
+
+static void test_navlistener_catalog_extensions(void) {
+    TEST_BEGIN("navlistener catalog extensions have stable names");
+
+    eeprom_ic_descriptor_t parts[] = {
+        IC_INSTALLED(CAT_GPS, GPS_NEO_M10),
+        IC_INSTALLED(CAT_GPS, GPS_NEO_F10N),
+        IC_INSTALLED(CAT_GPS, GPS_NEO_F10T),
+        IC_INSTALLED(CAT_GPS, GPS_ZED_F9T),
+        IC_I2C(CAT_PRESSURE, PRESSURE_BMP390, 0x76),
+        IC_I2C(CAT_SENSOR, SENSOR_HDC2080, 0x40),
+        IC_GPIO(CAT_POWER, POWER_ADM7150, 38),
+        IC_GPIO(CAT_POWER, POWER_RT9193, 21),
+        IC_INSTALLED(CAT_BATTERY, BATTERY_CR123A),
+    };
+    const char *names[] = {
+        "NEO-M10", "NEO-F10N", "NEO-F10T", "ZED-F9T", "BMP390",
+        "HDC2080", "ADM7150", "RT9193", "CR123A",
+    };
+
+    for (size_t i = 0; i < sizeof(parts) / sizeof(parts[0]); i++) {
+        CHECK(strcmp(eeprom_ic_name(&parts[i]), names[i]) == 0);
+    }
 }
 
 // ============================================================================
@@ -338,7 +400,12 @@ static void test_r017_duplicates(void) {
 static void test_r011_scan_foreign(void) {
     TEST_BEGIN("R-011: scan flags devices without a valid self-reference");
 
-    program_test_board();
+    eeprom_capabilities_t programmed;
+    make_test_board(&programmed);
+    use_addressable_manifest_eeprom(&programmed);
+    mock_reset();
+    mock_set_present(EEPROM_I2C_ADDR_0, true);
+    CHECK(eeprom_write_capabilities(EEPROM_I2C_ADDR_0, &programmed, false));
 
     // 0x51: foreign EEPROM with a plausible magic but garbage contents.
     mock_set_present(0x51, true);
@@ -356,6 +423,45 @@ static void test_r011_scan_foreign(void) {
     CHECK(boards[1].i2c_address == 0x51);
     CHECK(boards[1].magic == 42);
     CHECK(eeprom_validate_self_reference(&boards[1]) == false);
+}
+
+// ============================================================================
+// Dual EEPROM profile: addressable validation and non-addressable aliases
+// ============================================================================
+
+static void test_dual_eeprom_profiles(void) {
+    TEST_BEGIN("24AA02E64 and 24AA025E64 profiles validate and scan correctly");
+
+    eeprom_capabilities_t caps;
+    make_test_board(&caps);
+
+    // The new addressable part gets its own stable manifest ID and name.
+    use_addressable_manifest_eeprom(&caps);
+    mock_reset();
+    mock_set_present(EEPROM_I2C_ADDR_0, true);
+    CHECK(eeprom_write_capabilities(EEPROM_I2C_ADDR_0, &caps, false));
+
+    eeprom_capabilities_t verify;
+    CHECK(eeprom_read_capabilities(EEPROM_I2C_ADDR_0, &verify));
+    CHECK(eeprom_validate_self_reference(&verify));
+    CHECK(verify.components[0].id == MEMORY_24AA025E64);
+    CHECK(strcmp(eeprom_ic_name(&verify.components[0]), "24AA025E64") == 0);
+
+    // One non-addressable part physically ACKs every address, but a scan must
+    // return it once rather than manufacture eight logical boards.
+    make_test_board(&caps);
+    mock_reset();
+    mock_set_nonaddressable_present(true);
+    CHECK(eeprom_write_capabilities(EEPROM_I2C_ADDR_0, &caps, false));
+    for (uint8_t addr = EEPROM_I2C_ADDR_0; addr <= EEPROM_I2C_ADDR_7; addr++) {
+        CHECK(eeprom_is_programmed(addr));
+    }
+
+    eeprom_capabilities_t boards[8];
+    CHECK(eeprom_scan_bus(boards, 8) == 1);
+    CHECK(boards[0].i2c_address == EEPROM_I2C_ADDR_0);
+    CHECK(boards[0].components[0].id == MEMORY_24AA02E64);
+    CHECK(eeprom_validate_self_reference(&boards[0]));
 }
 
 // ============================================================================
@@ -435,13 +541,16 @@ int main(void) {
     test_r001_r002_write_layout();
     test_r004_commit_order();
     test_r003_guard();
+    test_program_state_blank();
     test_r006_partial_read();
     test_r012_uid_failure();
     test_r014_bounds();
     test_r017_duplicates();
     test_r011_scan_foreign();
+    test_dual_eeprom_profiles();
     test_r007_concurrency();
     test_r018_footer();
+    test_navlistener_catalog_extensions();
 
     printf("\n%s: %d failure(s)\n", s_failures ? "FAILED" : "ALL TESTS PASSED",
            s_failures);

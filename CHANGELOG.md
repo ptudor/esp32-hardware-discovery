@@ -39,7 +39,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Addressable `24AA025E64` support with stable `MEMORY_24AA025E64 = 6`,
+  part-specific self-reference helpers, validation, name mapping, and host tests
+- Non-addressable `24AA02E64` alias simulation in the host I2C mock
+- Public `eeprom_get_program_state()` API so first-boot provisioning can
+  distinguish a uniformly blank EEPROM from a partial/dirty image and an I2C
+  failure
+- GNSS observer catalog entries for NEO-M10/F10N/F10T, ZED-F9T, BMP390,
+  HDC2080, ADM7150, RT9193, and CR123A
+
 ### Changed (pre-release fixes from code review; 1.0.0 was never deployed)
+- EEPROM writes now deliberately use the 24AA02E64's 8-byte page size as a
+  safe common denominator for both supported parts
+- Bus scans return a self-described 24AA02E64 once instead of reporting the
+  same physical chip at all eight aliases in `0x50`-`0x57`
+- Hardware documentation now distinguishes the non-addressable 24AA02E64 from
+  the A0/A1/A2-addressable 24AA025E64 and correctly describes 248 writable
+  bytes plus the eight-byte factory EUI-64
 - BREAKING: migrated from the deprecated legacy `driver/i2c.h` API to the
   `i2c_master` driver; `eeprom_discovery_init(bus_handle)` must now be called
   once before any bus operation (requires ESP-IDF >= 5.2)

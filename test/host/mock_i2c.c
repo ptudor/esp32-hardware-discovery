@@ -1,6 +1,8 @@
 /**
- * Simulated 24AA02E64 EEPROMs behind the ESP-IDF i2c_master API, plus the
- * FreeRTOS primitives the module under test needs.
+ * Simulated 24AA02E64/24AA025E64 EEPROMs behind the ESP-IDF i2c_master API,
+ * plus the FreeRTOS primitives the module under test needs. Addressable mock
+ * devices respond at one selected address; the non-addressable mock models a
+ * single 24AA02E64 aliasing across the complete 0x50-0x57 block.
  *
  * The write path faithfully models the device's 8-byte page buffer: a write
  * transaction that carries more bytes than fit in the addressed page wraps
@@ -43,6 +45,7 @@ typedef struct {
 static struct mock_i2c_bus s_bus_obj;
 static struct mock_i2c_dev s_dev_objs[MOCK_EEPROM_COUNT];
 static mock_eeprom_t s_eeproms[MOCK_EEPROM_COUNT];
+static mock_eeprom_t s_nonaddressable_eeprom;
 
 static int s_fail_receive_memaddr = -1;
 static int s_fail_transmit_memaddr = -1;
@@ -68,6 +71,9 @@ static mock_eeprom_t *device_at(uint16_t addr) {
     if (addr < MOCK_EEPROM_BASE || addr >= MOCK_EEPROM_BASE + MOCK_EEPROM_COUNT) {
         return NULL;
     }
+    if (s_nonaddressable_eeprom.present) {
+        return &s_nonaddressable_eeprom;
+    }
     return &s_eeproms[addr - MOCK_EEPROM_BASE];
 }
 
@@ -81,6 +87,9 @@ void mock_reset(void) {
         memset(s_eeproms[i].mem, 0xFF, MOCK_EEPROM_SIZE);   // erased state
         s_eeproms[i].busy_probes = 0;
     }
+    s_nonaddressable_eeprom.present = false;
+    memset(s_nonaddressable_eeprom.mem, 0xFF, MOCK_EEPROM_SIZE);
+    s_nonaddressable_eeprom.busy_probes = 0;
     s_fail_receive_memaddr = -1;
     s_fail_transmit_memaddr = -1;
     s_write_txn_count = 0;
@@ -92,6 +101,10 @@ void mock_set_present(uint8_t dev_addr, bool present) {
     if (dev != NULL) {
         dev->present = present;
     }
+}
+
+void mock_set_nonaddressable_present(bool present) {
+    s_nonaddressable_eeprom.present = present;
 }
 
 uint8_t *mock_mem(uint8_t dev_addr) {

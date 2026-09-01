@@ -2,7 +2,9 @@
 
 ## What This Is
 
-ESP Hardware Discovery is an ESP-IDF component for runtime hardware capability discovery. It uses 4-byte IC descriptors stored in Microchip 24AA02E64 EEPROM to describe what's installed on a PCB.
+ESP Hardware Discovery is an ESP-IDF component for runtime hardware capability
+discovery. It uses 4-byte IC descriptors stored in a Microchip 24AA02E64 or
+addressable 24AA025E64 EEPROM to describe what's installed on a PCB.
 
 **The soul**: Program once at manufacturing. Discover at runtime. Know exactly what hardware you're talking to without compile-time configuration.
 
@@ -53,9 +55,10 @@ This is a shared component used across multiple projects. Breaking changes affec
 ESP32, ESP32-S2, ESP32-S3, ESP32-C2, ESP32-C3, ESP32-C6, ESP32-H2
 
 **Hardware:**
-- Microchip 24AA02E64-I/SN EEPROM
+- Microchip 24AA02E64-I/SN or 24AA025E64-I/SN EEPROM
 - I2C bus at 100kHz or 400kHz
-- Address range: 0x50-0x57
+- Address block: 0x50-0x57; 24AA02E64 aliases all eight addresses, while
+  24AA025E64 responds only at its A0/A1/A2-selected address
 
 **Build commands:**
 ```bash
@@ -70,12 +73,15 @@ idf.py flash monitor
 
 ### EEPROM Self-Reference
 
-**Always** make `components[0]` the EEPROM itself:
+**Always** make `components[0]` the EEPROM itself with the part-specific macro:
 ```c
-caps.components[0] = IC_EEPROM_SELF(EEPROM_I2C_ADDR_0);
+caps.components[0] = IC_EEPROM_SELF_24AA02E64(EEPROM_I2C_ADDR_0);
+// or
+caps.components[0] = IC_EEPROM_SELF_24AA025E64(EEPROM_I2C_ADDR_0);
 ```
 
 This enables validation that the stored address matches where we actually found the device.
+The legacy `IC_EEPROM_SELF(addr)` spelling continues to mean 24AA02E64.
 
 ### Component Iteration
 

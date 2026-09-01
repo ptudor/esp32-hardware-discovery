@@ -3,7 +3,8 @@
  * @brief Hardware capability discovery with 4-byte IC descriptors
  * @version 1.0.0
  *
- * Implementation for reading/writing board capabilities to 24AA02E64 EEPROM
+ * Implementation for reading/writing board capabilities to 24AA02E64 and
+ * 24AA025E64 EEPROMs
  */
 
 #include "esp_hardware_discovery.h"
@@ -20,9 +21,9 @@ static const char *TAG = "EEPROM_CAP";
 
 // I2C parameters
 #define I2C_MASTER_TIMEOUT_MS           100
-#define EEPROM_PAGE_SIZE                8   // 24AA02E64 page write buffer
+#define EEPROM_PAGE_SIZE                EEPROM_24AA02E64_PAGE_SIZE // Safe for both parts
 #define EEPROM_WRITE_CYCLE_TIMEOUT_MS   6   // Twc max is 5ms; +1ms margin
-#define EEPROM_ADDR_COUNT               8   // 0x50-0x57 (A0-A2 pins)
+#define EEPROM_ADDR_COUNT               8   // 24AA025E64 address-pin range
 
 // ============================================================================
 // MODULE STATE (set up by eeprom_discovery_init)
@@ -31,14 +32,6 @@ static const char *TAG = "EEPROM_CAP";
 static i2c_master_bus_handle_t s_bus = NULL;
 static i2c_master_dev_handle_t s_devices[EEPROM_ADDR_COUNT] = { NULL };
 static SemaphoreHandle_t s_lock = NULL;
-
-// EEPROM programming state. Tri-state: a bus error must never be mistaken
-// for a blank device, or the force=false overwrite guard could be bypassed.
-typedef enum {
-    EEPROM_STATE_BLANK,
-    EEPROM_STATE_PROGRAMMED,
-    EEPROM_STATE_BUS_ERROR,
-} eeprom_prog_state_t;
 
 esp_err_t eeprom_discovery_init(i2c_master_bus_handle_t bus_handle) {
     if (bus_handle == NULL) {
@@ -86,7 +79,7 @@ static void eeprom_unlock(void) {
  */
 static i2c_master_dev_handle_t eeprom_get_device(uint8_t i2c_addr) {
     if (i2c_addr < EEPROM_I2C_ADDR_0 || i2c_addr > EEPROM_I2C_ADDR_7) {
-        ESP_LOGE(TAG, "Address 0x%02X outside 24AA02E64 range 0x50-0x57", i2c_addr);
+        ESP_LOGE(TAG, "Address 0x%02X outside manifest EEPROM range 0x50-0x57", i2c_addr);
         return NULL;
     }
 
@@ -113,8 +106,8 @@ static i2c_master_dev_handle_t eeprom_get_device(uint8_t i2c_addr) {
 /**
  * @brief ACK-poll until the EEPROM finishes its internal write cycle
  *
- * After a page write the 24AA02E64 NACKs its own address until the write
- * cycle (Twc, max 5ms) completes.
+ * After a page write either supported EEPROM NACKs its own address until the
+ * write cycle (Twc, max 5ms) completes.
  */
 static esp_err_t eeprom_wait_write_complete(uint8_t i2c_addr) {
     TickType_t start = xTaskGetTickCount();
@@ -134,9 +127,10 @@ static esp_err_t eeprom_wait_write_complete(uint8_t i2c_addr) {
  * @brief Write bytes to EEPROM
  *
  * Splits the write into transactions that respect the 24AA02E64's 8-byte
- * page buffer: each transaction carries at most 8 data bytes and never
- * crosses a page boundary (longer transactions would silently wrap around
- * within the page and corrupt data). ACK-polls after every page.
+ * page buffer, the smaller of the two supported variants. This is also safe
+ * on the 24AA025E64's 16-byte pages. Each transaction carries at most eight
+ * data bytes and never crosses an 8-byte boundary. ACK-polls after every
+ * chunk.
  */
 static esp_err_t eeprom_write_bytes(uint8_t i2c_addr, uint8_t mem_addr,
                                      const uint8_t *data, size_t len) {
@@ -144,9 +138,9 @@ static esp_err_t eeprom_write_bytes(uint8_t i2c_addr, uint8_t mem_addr,
         return ESP_ERR_INVALID_ARG;
     }
 
-    if ((size_t)mem_addr + len > EEPROM_24AA02E64_SIZE) {
+    if ((size_t)mem_addr + len > EEPROM_24AAXXE64_SIZE) {
         ESP_LOGE(TAG, "Write out of bounds: addr %u + len %zu > %d",
-                 mem_addr, len, EEPROM_24AA02E64_SIZE);
+                 mem_addr, len, EEPROM_24AAXXE64_SIZE);
         return ESP_ERR_INVALID_SIZE;
     }
 
@@ -204,9 +198,9 @@ static esp_err_t eeprom_read_bytes(uint8_t i2c_addr, uint8_t mem_addr,
         return ESP_ERR_INVALID_ARG;
     }
 
-    if ((size_t)mem_addr + len > EEPROM_24AA02E64_SIZE) {
+    if ((size_t)mem_addr + len > EEPROM_24AAXXE64_SIZE) {
         ESP_LOGE(TAG, "Read out of bounds: addr %u + len %zu > %d",
-                 mem_addr, len, EEPROM_24AA02E64_SIZE);
+                 mem_addr, len, EEPROM_24AAXXE64_SIZE);
         return ESP_ERR_INVALID_SIZE;
     }
 
@@ -229,22 +223,36 @@ static bool eeprom_probe(uint8_t i2c_addr) {
 /**
  * @brief Read the magic byte and classify the device state
  *
- * Distinguishes "blank" from "bus error" so callers can refuse to act on a
- * failed read instead of treating it as an unprogrammed device.
+ * "Blank" means every writable byte is the same erased/unprogrammed fill
+ * value (0xFF or 0x00). If the magic says blank but any other writable byte
+ * differs, a write was interrupted or an old image was only partly erased;
+ * provisioning must require explicit recovery rather than overwrite it.
  */
-static eeprom_prog_state_t eeprom_get_prog_state(uint8_t i2c_addr) {
+static eeprom_program_state_t eeprom_get_prog_state(uint8_t i2c_addr) {
     uint8_t magic;
     esp_err_t ret = eeprom_read_bytes(i2c_addr, CAP_OFFSET_MAGIC, &magic, 1);
 
     if (ret != ESP_OK) {
-        return EEPROM_STATE_BUS_ERROR;
+        return EEPROM_PROGRAM_STATE_BUS_ERROR;
     }
 
     if (magic >= CAP_MAGIC_MIN && magic <= CAP_MAGIC_MAX) {
-        return EEPROM_STATE_PROGRAMMED;
+        return EEPROM_PROGRAM_STATE_PROGRAMMED;
     }
 
-    return EEPROM_STATE_BLANK;
+    uint8_t image[EEPROM_24AAXXE64_WRITABLE_SIZE];
+    ret = eeprom_read_bytes(i2c_addr, 0, image, sizeof(image));
+    if (ret != ESP_OK) {
+        return EEPROM_PROGRAM_STATE_BUS_ERROR;
+    }
+
+    for (size_t i = 0; i < sizeof(image); i++) {
+        if (image[i] != magic) {
+            return EEPROM_PROGRAM_STATE_INVALID;
+        }
+    }
+
+    return EEPROM_PROGRAM_STATE_BLANK;
 }
 
 // ============================================================================
@@ -362,16 +370,22 @@ static bool eeprom_write_capabilities_unlocked(uint8_t i2c_addr,
     // write is the only safe response, otherwise a transient glitch would
     // bypass the overwrite guard.
     if (!force) {
-        eeprom_prog_state_t state = eeprom_get_prog_state(i2c_addr);
+        eeprom_program_state_t state = eeprom_get_prog_state(i2c_addr);
 
-        if (state == EEPROM_STATE_BUS_ERROR) {
+        if (state == EEPROM_PROGRAM_STATE_BUS_ERROR) {
             ESP_LOGE(TAG, "Cannot verify programming state of 0x%02X (bus error) - refusing to write",
                      i2c_addr);
             return false;
         }
 
-        if (state == EEPROM_STATE_PROGRAMMED) {
+        if (state == EEPROM_PROGRAM_STATE_PROGRAMMED) {
             ESP_LOGW(TAG, "EEPROM already programmed at 0x%02X (use force=true to override)",
+                     i2c_addr);
+            return false;
+        }
+
+        if (state == EEPROM_PROGRAM_STATE_INVALID) {
+            ESP_LOGE(TAG, "EEPROM at 0x%02X has a partial/dirty image - refusing to write",
                      i2c_addr);
             return false;
         }
@@ -554,16 +568,20 @@ static bool eeprom_update_ic_status_internal(uint8_t i2c_addr,
 // PUBLIC API FUNCTIONS
 // ============================================================================
 
-bool eeprom_is_programmed(uint8_t i2c_addr) {
+eeprom_program_state_t eeprom_get_program_state(uint8_t i2c_addr) {
     if (!eeprom_check_init()) {
-        return false;
+        return EEPROM_PROGRAM_STATE_BUS_ERROR;
     }
 
     eeprom_lock();
-    bool programmed = (eeprom_get_prog_state(i2c_addr) == EEPROM_STATE_PROGRAMMED);
+    eeprom_program_state_t state = eeprom_get_prog_state(i2c_addr);
     eeprom_unlock();
 
-    return programmed;
+    return state;
+}
+
+bool eeprom_is_programmed(uint8_t i2c_addr) {
+    return eeprom_get_program_state(i2c_addr) == EEPROM_PROGRAM_STATE_PROGRAMMED;
 }
 
 bool eeprom_read_unique_id(uint8_t i2c_addr, uint8_t *unique_id) {
@@ -627,7 +645,7 @@ int eeprom_scan_bus(eeprom_capabilities_t *caps, int max_devices) {
         return 0;
     }
 
-    ESP_LOGI(TAG, "Scanning I2C bus for 24AA02E64 EEPROMs...");
+    ESP_LOGI(TAG, "Scanning I2C bus for manifest EEPROMs...");
 
     eeprom_lock();
 
@@ -640,20 +658,41 @@ int eeprom_scan_bus(eeprom_capabilities_t *caps, int max_devices) {
         if (eeprom_probe(addr)) {
             ESP_LOGI(TAG, "Found EEPROM at 0x%02X", addr);
 
-            eeprom_prog_state_t state = eeprom_get_prog_state(addr);
+            eeprom_program_state_t state = eeprom_get_prog_state(addr);
 
-            if (state == EEPROM_STATE_PROGRAMMED) {
+            if (state == EEPROM_PROGRAM_STATE_PROGRAMMED) {
                 if (eeprom_read_capabilities_unlocked(addr, &caps[found])) {
-                    if (!eeprom_validate_self_reference(&caps[found])) {
+                    bool valid_self = eeprom_validate_self_reference(&caps[found]);
+                    if (!valid_self) {
                         ESP_LOGW(TAG, "Device at 0x%02X has no valid self-reference - foreign EEPROM?",
                                  addr);
                     }
+
+                    // The non-addressable 24AA02E64 ignores A2/A1/A0 in the
+                    // control byte and the same physical chip ACKs 0x50-0x57.
+                    // Its self-descriptor is enough to identify that profile;
+                    // after recording it once, continuing would return seven
+                    // aliases and could never reveal another usable device in
+                    // the electrically-conflicting address block.
+                    bool aliases_address_block =
+                        caps[found].component_count > 0 &&
+                        caps[found].components[0].category == CAT_MEMORY &&
+                        caps[found].components[0].id == MEMORY_24AA02E64 &&
+                        caps[found].components[0].status == IC_STATUS_INSTALLED;
+
                     found++;
+
+                    if (aliases_address_block) {
+                        ESP_LOGI(TAG, "24AA02E64 aliases 0x50-0x57; stopping after one physical EEPROM");
+                        break;
+                    }
                 } else {
                     ESP_LOGW(TAG, "Failed to read capabilities from 0x%02X", addr);
                 }
-            } else if (state == EEPROM_STATE_BUS_ERROR) {
+            } else if (state == EEPROM_PROGRAM_STATE_BUS_ERROR) {
                 ESP_LOGW(TAG, "Failed to read magic byte from 0x%02X", addr);
+            } else if (state == EEPROM_PROGRAM_STATE_INVALID) {
+                ESP_LOGW(TAG, "EEPROM at 0x%02X has a partial/dirty image", addr);
             } else {
                 ESP_LOGI(TAG, "EEPROM at 0x%02X is not programmed", addr);
             }
@@ -815,6 +854,10 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case GPS_NEO_M9P: return "NEO-M9P";
             case GPS_SAM_M8Q: return "SAM-M8Q";
             case GPS_NEO_7M:  return "NEO-7M";
+            case GPS_NEO_M10: return "NEO-M10";
+            case GPS_NEO_F10N: return "NEO-F10N";
+            case GPS_NEO_F10T: return "NEO-F10T";
+            case GPS_ZED_F9T: return "ZED-F9T";
         }
     }
 
@@ -899,6 +942,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case PRESSURE_BMP280: return "BMP280";
             case PRESSURE_BMP388: return "BMP388";
             case PRESSURE_MS5611: return "MS5611";
+            case PRESSURE_BMP390: return "BMP390";
         }
     }
 
@@ -911,6 +955,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case SENSOR_HALL_EFFECT:  return "Hall Effect";
             case SENSOR_LIGHT_TSL25911: return "TSL25911";
             case SENSOR_THERMOCOUPLE_MAX31855: return "MAX31855";
+            case SENSOR_HDC2080: return "HDC2080";
         }
     }
 
@@ -930,6 +975,8 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case POWER_INA3221: return "INA3221";
             case POWER_BQ25895: return "BQ25895";
             case POWER_LTC4150: return "LTC4150";
+            case POWER_ADM7150: return "ADM7150";
+            case POWER_RT9193:  return "RT9193";
         }
     }
 
@@ -965,6 +1012,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case MEMORY_AT24C32:   return "AT24C32";
             case MEMORY_25LC640:   return "25LC640";
             case MEMORY_W25Q128:   return "W25Q128";
+            case MEMORY_24AA025E64: return "24AA025E64";
         }
     }
 
@@ -1009,6 +1057,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case BATTERY_18650_2S:   return "18650 2S";
             case BATTERY_SOLAR_6V:   return "Solar 6V";
             case POWER_POE:          return "PoE";
+            case BATTERY_CR123A:     return "CR123A";
         }
     }
 
@@ -1072,8 +1121,9 @@ bool eeprom_validate_self_reference(const eeprom_capabilities_t *caps) {
         return false;
     }
 
-    if (first->id != MEMORY_24AA02E64) {
-        ESP_LOGW(TAG, "Component[0] is not 24AA02E64 (found: %s)",
+    if (first->id != MEMORY_24AA02E64 &&
+        first->id != MEMORY_24AA025E64) {
+        ESP_LOGW(TAG, "Component[0] is not a supported manifest EEPROM (found: %s)",
                  eeprom_ic_name(first));
         return false;
     }

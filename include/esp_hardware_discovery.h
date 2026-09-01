@@ -32,9 +32,19 @@ extern "C" {
 // EEPROM HARDWARE
 // ============================================================================
 
-#define EEPROM_24AA02E64_SIZE       256
+#define EEPROM_24AAXXE64_SIZE           256
+#define EEPROM_24AAXXE64_WRITABLE_SIZE  248
+#define EEPROM_24AA02E64_PAGE_SIZE        8
+#define EEPROM_24AA025E64_PAGE_SIZE      16
 
-// I2C addresses
+// Backward-compatible part-specific size names. Both variants use the same
+// 256-byte array and reserve the final eight bytes for the factory EUI-64.
+#define EEPROM_24AA02E64_SIZE        EEPROM_24AAXXE64_SIZE
+#define EEPROM_24AA025E64_SIZE       EEPROM_24AAXXE64_SIZE
+
+// I2C address block. The 24AA02E64 ignores A2/A1/A0 in the control byte and
+// therefore aliases across all eight addresses. The 24AA025E64 compares those
+// bits with its three address pins and responds at one strapped address.
 #define EEPROM_I2C_ADDR_BASE        0x50
 #define EEPROM_I2C_ADDR_0           0x50
 #define EEPROM_I2C_ADDR_1           0x51
@@ -45,8 +55,8 @@ extern "C" {
 #define EEPROM_I2C_ADDR_6           0x56
 #define EEPROM_I2C_ADDR_7           0x57
 
-// I2C bus speed used for the EEPROM device (Hz). The 24AA02E64 supports
-// 100 kHz and 400 kHz. Override at compile time if needed.
+// I2C bus speed used for the EEPROM device (Hz). Both supported variants
+// support 100 kHz and 400 kHz. Override at compile time if needed.
 #ifndef EEPROM_DISCOVERY_I2C_SPEED_HZ
 #define EEPROM_DISCOVERY_I2C_SPEED_HZ   100000
 #endif
@@ -219,6 +229,10 @@ typedef enum {
     GPS_NEO_M9P     = 4,
     GPS_SAM_M8Q     = 5,
     GPS_NEO_7M      = 6,
+    GPS_NEO_M10     = 7,
+    GPS_NEO_F10N    = 8,
+    GPS_NEO_F10T    = 9,
+    GPS_ZED_F9T     = 10,
 } eeprom_gps_id_t;
 
 // IMU (CAT_IMU = 3)
@@ -295,6 +309,7 @@ typedef enum {
     PRESSURE_BMP280     = 1,
     PRESSURE_BMP388     = 2,
     PRESSURE_MS5611     = 3,
+    PRESSURE_BMP390     = 4,
 } eeprom_pressure_id_t;
 
 // Generic Sensors (CAT_SENSOR = 11)
@@ -306,6 +321,7 @@ typedef enum {
     SENSOR_HALL_EFFECT     = 5,
     SENSOR_LIGHT_TSL25911  = 6,
     SENSOR_THERMOCOUPLE_MAX31855 = 7,
+    SENSOR_HDC2080         = 8,
 } eeprom_sensor_id_t;
 
 // Audio (CAT_AUDIO = 12)
@@ -323,6 +339,8 @@ typedef enum {
     POWER_INA3221       = 2,        // 3-channel monitor
     POWER_BQ25895       = 3,        // Battery charger
     POWER_LTC4150       = 4,        // Coulomb counter
+    POWER_ADM7150       = 5,        // GPIO-gated low-noise LDO
+    POWER_RT9193        = 6,        // GPIO-gated low-noise LDO
 } eeprom_power_id_t;
 
 // LED Drivers (CAT_LED = 14)
@@ -355,6 +373,7 @@ typedef enum {
     MEMORY_AT24C32      = 3,
     MEMORY_25LC640      = 4,        // SPI EEPROM
     MEMORY_W25Q128      = 5,        // SPI Flash
+    MEMORY_24AA025E64   = 6,        // Addressable EUI-64 manifest EEPROM
 } eeprom_memory_id_t;
 
 // MCU (CAT_MCU = 17)
@@ -396,6 +415,7 @@ typedef enum {
     BATTERY_18650_2S        = 4,
     BATTERY_SOLAR_6V        = 5,
     POWER_POE               = 6,    // Power over Ethernet
+    BATTERY_CR123A          = 7,
 } eeprom_battery_id_t;
 
 // Actuators (CAT_ACTUATOR = 21)
@@ -496,13 +516,37 @@ typedef struct {
 #define IC_NOT_POP(cat, id) \
     IC(cat, id, 0, IC_STATUS_NOT_POPULATED)
 
-// EEPROM self-reference helper (should be component[0])
+// EEPROM self-reference helpers (should be component[0]). IC_EEPROM_SELF is
+// retained as the backward-compatible spelling for a 24AA02E64.
+#define IC_EEPROM_SELF_TYPE(memory_id, addr) \
+    IC_I2C(CAT_MEMORY, memory_id, addr)
+
+#define IC_EEPROM_SELF_24AA02E64(addr) \
+    IC_EEPROM_SELF_TYPE(MEMORY_24AA02E64, addr)
+
+#define IC_EEPROM_SELF_24AA025E64(addr) \
+    IC_EEPROM_SELF_TYPE(MEMORY_24AA025E64, addr)
+
 #define IC_EEPROM_SELF(addr) \
-    IC_I2C(CAT_MEMORY, MEMORY_24AA02E64, addr)
+    IC_EEPROM_SELF_24AA02E64(addr)
 
 // ============================================================================
 // FUNCTION PROTOTYPES
 // ============================================================================
+
+/**
+ * @brief Result of reading the EEPROM magic byte
+ *
+ * A bus error and a partial/dirty image are intentionally distinct from a
+ * blank device. Provisioning software may offer initialization only for
+ * EEPROM_PROGRAM_STATE_BLANK.
+ */
+typedef enum {
+    EEPROM_PROGRAM_STATE_BLANK = 0,
+    EEPROM_PROGRAM_STATE_PROGRAMMED = 1,
+    EEPROM_PROGRAM_STATE_BUS_ERROR = 2,
+    EEPROM_PROGRAM_STATE_INVALID = 3,
+} eeprom_program_state_t;
 
 /**
  * @brief Initialize the discovery module
@@ -517,6 +561,15 @@ typedef struct {
  */
 esp_err_t eeprom_discovery_init(i2c_master_bus_handle_t bus_handle);
 
+eeprom_program_state_t eeprom_get_program_state(uint8_t i2c_addr);
+
+/**
+ * @brief Backward-compatible boolean programming check
+ *
+ * Returns true only for EEPROM_PROGRAM_STATE_PROGRAMMED. Blank, invalid and
+ * bus-error states return false; provisioning code should use
+ * eeprom_get_program_state() so it can distinguish those cases.
+ */
 bool eeprom_is_programmed(uint8_t i2c_addr);
 
 bool eeprom_read_capabilities(uint8_t i2c_addr, eeprom_capabilities_t *caps);
@@ -537,13 +590,20 @@ bool eeprom_read_unique_id(uint8_t i2c_addr, uint8_t *unique_id);
  * valid until the final page is committed.
  *
  * @param force Overwrite even if the EEPROM is already programmed. With
- *              force=false, a bus error during the guard check aborts the
- *              write (it is never treated as "blank").
+ *              force=false, a bus error or partial/dirty image during the
+ *              guard check aborts the write (neither is treated as "blank").
  */
 bool eeprom_write_capabilities(uint8_t i2c_addr,
                                 const eeprom_capabilities_t *caps,
                                 bool force);
 
+/**
+ * @brief Scan the 0x50-0x57 manifest EEPROM address block
+ *
+ * Addressable 24AA025E64 devices are returned independently. A 24AA02E64
+ * ignores the three select bits and ACKs every address in the block, so the
+ * scan records that physical device once and stops.
+ */
 int eeprom_scan_bus(eeprom_capabilities_t *caps, int max_devices);
 
 void eeprom_print_capabilities(const eeprom_capabilities_t *caps);

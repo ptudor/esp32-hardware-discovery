@@ -1,4 +1,4 @@
-/* Control API for the simulated 24AA02E64 devices used by the host tests */
+/* Control API for the simulated 24AA02E64/24AA025E64 host-test devices */
 #ifndef MOCK_I2C_H
 #define MOCK_I2C_H
 
@@ -21,6 +21,9 @@ void mock_reset(void);
 
 // Make a device at dev_addr respond (or stop responding) on the bus.
 void mock_set_present(uint8_t dev_addr, bool present);
+
+// Make one non-addressable 24AA02E64 respond at every address 0x50-0x57.
+void mock_set_nonaddressable_present(bool present);
 
 // Direct access to a device's 256-byte memory image.
 uint8_t *mock_mem(uint8_t dev_addr);
