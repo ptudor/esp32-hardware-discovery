@@ -48,6 +48,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failure
 - GNSS observer catalog entries for NEO-M10/F10N/F10T, ZED-F9T, BMP390,
   HDC2080, ADM7150, RT9193, and CR123A
+- GNSS observer catalog entries for the MAX form factor and the mobile sensor
+  group: MAX-M10S/M10N/F10S and ZED-X20P receivers, the MAX31328 TCXO clock,
+  the ICM-45686 IMU, the MMC34160PJ magnetometer, the MS5607 pressure sensor,
+  and CR2032/CR1220 cells
 
 ### Changed (pre-release fixes from code review; 1.0.0 was never deployed)
 - EEPROM writes now deliberately use the 24AA02E64's 8-byte page size as a

@@ -278,6 +278,18 @@ static void test_program_state_blank(void) {
 static void test_navlistener_catalog_extensions(void) {
     TEST_BEGIN("navlistener catalog extensions have stable names");
 
+    // A programmed EEPROM stores the number, not the symbol, so renumbering any
+    // of these silently rewrites what boards in the field claim to be.
+    _Static_assert(GPS_MAX_M10S == 11 && GPS_MAX_M10N == 12 &&
+                   GPS_MAX_F10S == 13 && GPS_ZED_X20P == 14,
+                   "GPS catalog values are written into EEPROMs; append, never renumber");
+    _Static_assert(RTC_MAX31328 == 7, "RTC catalog value is written into EEPROMs");
+    _Static_assert(IMU_ICM45686 == 7, "IMU catalog value is written into EEPROMs");
+    _Static_assert(PRESSURE_MS5607 == 5, "pressure catalog value is written into EEPROMs");
+    _Static_assert(SENSOR_MAG_MMC34160PJ == 9, "sensor catalog value is written into EEPROMs");
+    _Static_assert(BATTERY_CR2032 == 8 && BATTERY_CR1220 == 9,
+                   "battery catalog values are written into EEPROMs");
+
     eeprom_ic_descriptor_t parts[] = {
         IC_INSTALLED(CAT_GPS, GPS_NEO_M10),
         IC_INSTALLED(CAT_GPS, GPS_NEO_F10N),
@@ -288,10 +300,22 @@ static void test_navlistener_catalog_extensions(void) {
         IC_GPIO(CAT_POWER, POWER_ADM7150, 38),
         IC_GPIO(CAT_POWER, POWER_RT9193, 21),
         IC_INSTALLED(CAT_BATTERY, BATTERY_CR123A),
+        IC_INSTALLED(CAT_GPS, GPS_MAX_M10S),
+        IC_INSTALLED(CAT_GPS, GPS_MAX_M10N),
+        IC_INSTALLED(CAT_GPS, GPS_MAX_F10S),
+        IC_INSTALLED(CAT_GPS, GPS_ZED_X20P),
+        IC_I2C(CAT_RTC, RTC_MAX31328, 0x68),
+        IC_I2C(CAT_IMU, IMU_ICM45686, 0x69),
+        IC_I2C(CAT_SENSOR, SENSOR_MAG_MMC34160PJ, 0x30),
+        IC_I2C(CAT_PRESSURE, PRESSURE_MS5607, 0x77),
+        IC_INSTALLED(CAT_BATTERY, BATTERY_CR2032),
+        IC_INSTALLED(CAT_BATTERY, BATTERY_CR1220),
     };
     const char *names[] = {
         "NEO-M10", "NEO-F10N", "NEO-F10T", "ZED-F9T", "BMP390",
         "HDC2080", "ADM7150", "RT9193", "CR123A",
+        "MAX-M10S", "MAX-M10N", "MAX-F10S", "ZED-X20P", "MAX31328",
+        "ICM-45686", "MMC34160PJ", "MS5607", "CR2032", "CR1220",
     };
 
     for (size_t i = 0; i < sizeof(parts) / sizeof(parts[0]); i++) {

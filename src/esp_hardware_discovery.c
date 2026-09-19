@@ -843,6 +843,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case RTC_MAX31343: return "MAX31343";
             case RTC_PCF8523:  return "PCF8523";
             case RTC_RV3028:   return "RV3028";
+            case RTC_MAX31328: return "MAX31328";
         }
     }
 
@@ -858,6 +859,10 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case GPS_NEO_F10N: return "NEO-F10N";
             case GPS_NEO_F10T: return "NEO-F10T";
             case GPS_ZED_F9T: return "ZED-F9T";
+            case GPS_MAX_M10S: return "MAX-M10S";
+            case GPS_MAX_M10N: return "MAX-M10N";
+            case GPS_MAX_F10S: return "MAX-F10S";
+            case GPS_ZED_X20P: return "ZED-X20P";
         }
     }
 
@@ -869,6 +874,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case IMU_MPU6050:   return "MPU6050";
             case IMU_BNO055:    return "BNO055";
             case IMU_LSM9DS1:   return "LSM9DS1";
+            case IMU_ICM45686:  return "ICM-45686";
         }
     }
 
@@ -943,6 +949,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case PRESSURE_BMP388: return "BMP388";
             case PRESSURE_MS5611: return "MS5611";
             case PRESSURE_BMP390: return "BMP390";
+            case PRESSURE_MS5607: return "MS5607";
         }
     }
 
@@ -956,6 +963,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case SENSOR_LIGHT_TSL25911: return "TSL25911";
             case SENSOR_THERMOCOUPLE_MAX31855: return "MAX31855";
             case SENSOR_HDC2080: return "HDC2080";
+            case SENSOR_MAG_MMC34160PJ: return "MMC34160PJ";
         }
     }
 
@@ -1058,6 +1066,8 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case BATTERY_SOLAR_6V:   return "Solar 6V";
             case POWER_POE:          return "PoE";
             case BATTERY_CR123A:     return "CR123A";
+            case BATTERY_CR2032:     return "CR2032";
+            case BATTERY_CR1220:     return "CR1220";
         }
     }
 

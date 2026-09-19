@@ -219,6 +219,7 @@ typedef enum {
     RTC_MAX31343    = 4,
     RTC_PCF8523     = 5,
     RTC_RV3028      = 6,
+    RTC_MAX31328    = 7,        // TCXO with integrated crystal; fixed address 0x68
 } eeprom_rtc_id_t;
 
 // GPS (CAT_GPS = 2)
@@ -233,6 +234,10 @@ typedef enum {
     GPS_NEO_F10N    = 8,
     GPS_NEO_F10T    = 9,
     GPS_ZED_F9T     = 10,
+    GPS_MAX_M10S    = 11,       // MAX form factor, 18-pad LCC, from here down
+    GPS_MAX_M10N    = 12,
+    GPS_MAX_F10S    = 13,
+    GPS_ZED_X20P    = 14,
 } eeprom_gps_id_t;
 
 // IMU (CAT_IMU = 3)
@@ -243,6 +248,7 @@ typedef enum {
     IMU_MPU6050     = 4,
     IMU_BNO055      = 5,
     IMU_LSM9DS1     = 6,
+    IMU_ICM45686    = 7,
 } eeprom_imu_id_t;
 
 // Crypto (CAT_CRYPTO = 4)
@@ -310,6 +316,7 @@ typedef enum {
     PRESSURE_BMP388     = 2,
     PRESSURE_MS5611     = 3,
     PRESSURE_BMP390     = 4,
+    PRESSURE_MS5607     = 5,    // 10-1200 mbar extended range; not an MS5611
 } eeprom_pressure_id_t;
 
 // Generic Sensors (CAT_SENSOR = 11)
@@ -322,6 +329,7 @@ typedef enum {
     SENSOR_LIGHT_TSL25911  = 6,
     SENSOR_THERMOCOUPLE_MAX31855 = 7,
     SENSOR_HDC2080         = 8,
+    SENSOR_MAG_MMC34160PJ  = 9, // Three-axis magnetometer
 } eeprom_sensor_id_t;
 
 // Audio (CAT_AUDIO = 12)
@@ -416,6 +424,8 @@ typedef enum {
     BATTERY_SOLAR_6V        = 5,
     POWER_POE               = 6,    // Power over Ethernet
     BATTERY_CR123A          = 7,
+    BATTERY_CR2032          = 8,
+    BATTERY_CR1220          = 9,
 } eeprom_battery_id_t;
 
 // Actuators (CAT_ACTUATOR = 21)
