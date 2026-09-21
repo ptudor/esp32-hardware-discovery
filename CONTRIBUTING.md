@@ -50,6 +50,6 @@ when behavior changes.
 A production release uses a `vMAJOR.MINOR.PATCH` tag matching
 `idf_component.yml`. Before publishing, update the changelog and installation
 examples, run the checks, and verify CI on the exact commit being tagged.
-Release notes describe features, upgrade requirements, and validation scope.
+Release notes describe features, framework requirements, and validation scope.
 GitHub provides the source archives; applications build their own firmware.
 The component is currently distributed through GitHub.

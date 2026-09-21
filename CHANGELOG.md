@@ -56,25 +56,6 @@ and all EEPROM and catalog additions since `20251231`.
 - Installation instructions use the GitHub release instead of an unavailable
   registry package; component metadata points to the repository documentation.
 
-### Migration from 20251231
-
-- **ESP-IDF 5.2 or later is required.** Create an `i2c_master` bus and call
-  `eeprom_discovery_init(bus_handle)` once before bus operations. The legacy
-  `driver/i2c.h` setup is no longer used.
-- Select the 24CS128 or M24128-U profile from known assembly information
-  before scanning, reading, or provisioning. The default profile handles
-  both 24AA variants.
-- `eeprom_find_category()` returns a `const eeprom_ic_descriptor_t *`.
-- `CAP_COMPONENT_SIZE` was removed; use `CAP_BYTES_PER_IC`.
-  `CAP_OFFSET_IC_LIST` remains a deprecated alias of `CAP_OFFSET_COMPONENTS`.
-- The historical implementation wrote descriptors at byte 8 instead of the
-  documented byte 16. Reprovision EEPROMs written by that snapshot from the
-  authoritative board manifest; there is no automatic data migration.
-- Use `eeprom_read_factory_id()` for board identity across all supported
-  parts. The legacy EUI API and `unique_id[8]` field remain 24AA-only.
-- Existing category and part IDs and the four-byte descriptor format remain
-  unchanged. Catalog additions append IDs within existing categories.
-
 ## [20251231] - 2026-01-02
 
 Initial public source snapshot, published January 2, 2026, originally tagged

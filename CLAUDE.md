@@ -16,17 +16,18 @@ See OVERVIEW.md for complete architecture and API documentation.
 
 **READ THIS BEFORE EVERY CHANGE.**
 
-This is a shared component used across multiple projects. Breaking changes affect all downstream users.
+Treat the documented public API, EEPROM format, and catalog IDs as shared
+interfaces.
 
 ### Never Do These Things
 
 1. **Never delete a function without explicit permission.** If something seems unused, ASK. It might be used by a project you don't have visibility into.
 
-2. **Never change the EEPROM memory layout.** Boards in the field have programmed EEPROMs. Layout changes require migration paths.
+2. **Never change the EEPROM memory layout.** Preserve the shared format unless a change is explicitly authorized; establish whether any programmed data needs preserving before proposing migration work.
 
 3. **Never modify IC descriptor format.** The 4-byte format `[category][id][address][status]` is fixed.
 
-4. **Never change enum values.** Adding new values is fine. Changing existing `CAT_GPS = 2` to something else breaks all programmed boards.
+4. **Never change enum values.** Adding new values is fine. Changing existing `CAT_GPS = 2` to something else changes how stored descriptors are interpreted.
 
 5. **Never remove error handling or logging.** ESP_LOGE/LOGW/LOGI calls are essential for debugging hardware issues.
 

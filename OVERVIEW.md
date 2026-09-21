@@ -45,7 +45,7 @@ separate component ID.
 The descriptor's address byte is polymorphic: I2C address for I2C parts,
 GPIO pin for buttons/LEDs, PWM channel for actuators, 0 for SPI/UART/other.
 
-**Layout invariants** (boards in the field depend on these): descriptor byte
+**Layout invariants**: descriptor byte
 order, header bytes 0–7, the unique-ID region, and all existing enum values
 are frozen. New ICs/categories/projects append with the next available ID.
 
