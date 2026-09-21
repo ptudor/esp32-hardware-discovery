@@ -1,7 +1,7 @@
 # ESP Hardware Discovery
 
 [![CI](https://github.com/ptudor/esp32-hardware-discovery/actions/workflows/ci.yml/badge.svg)](https://github.com/ptudor/esp32-hardware-discovery/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/ptudor/esp32-hardware-discovery)](https://github.com/ptudor/esp32-hardware-discovery/releases/latest)
+[![Release](https://img.shields.io/github/v/release/ptudor/esp32-hardware-discovery?sort=date)](https://github.com/ptudor/esp32-hardware-discovery/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE.txt)
 
 ESP-IDF component for EEPROM-based board identification, hardware manifests,
