@@ -663,6 +663,61 @@ static void test_cs128_manifest(void) {
     CHECK(eeprom_set_profile(0x50, EEPROM_PROFILE_24AAXXE64) == ESP_OK);
 }
 
+static void test_st_manifest(void) {
+    TEST_BEGIN("M24128_U manifest, page boundaries, mixed scan and preserved extra storage");
+    mock_reset();
+    mock_set_st_present(0x50);
+    eeprom_capabilities_t caps;
+    make_test_board(&caps);
+    caps.components[0] = IC_EEPROM_SELF_M24128_U(0x50);
+    // Never infer the transport from an ACK or the caller's descriptor.
+    CHECK(!eeprom_write_capabilities(0x50, &caps, true));
+    CHECK(mock_write_txn_count() == 0 && mock_read_txn_count() == 0);
+    CHECK(eeprom_set_profile(0x50, EEPROM_PROFILE_M24128_U) == ESP_OK);
+    caps.component_count = CAP_MAX_COMPONENTS;
+    for (int i = 5; i < CAP_MAX_COMPONENTS; i++) {
+        caps.components[i] = IC_GPIO(CAT_BUTTON, BUTTON_USER_2, i);
+    }
+    // Blank checks concern the manifest only; unrelated storage must survive.
+    memset(mock_mem(0x50) + 240, 0xC3, MOCK_CS128_SIZE - 240);
+    memset(mock_mem(0x50) + 240, 0xFF, 8);
+    CHECK(eeprom_get_program_state(0x50) == EEPROM_PROGRAM_STATE_BLANK);
+    CHECK(eeprom_write_capabilities(0x50, &caps, false));
+    CHECK(mock_write_txn_count() == 6); // 48+64+64+48 descriptors, timestamp, header
+    for (int i = 0; i < mock_write_txn_count(); i++) {
+        const mock_write_txn_t *txn = mock_write_txn(i);
+        CHECK(txn->dev_addr == 0x50 && txn->address_len == 2);
+        CHECK(txn->data_len <= 64 && txn->mem_addr / 64 ==
+              (txn->mem_addr + txn->data_len - 1) / 64);
+    }
+    CHECK(mock_write_txn(0)->mem_addr == 16 && mock_write_txn(0)->data_len == 48);
+    CHECK(mock_write_txn(5)->mem_addr == 0);
+    for (size_t i = 248; i < MOCK_CS128_SIZE; i++) CHECK(mock_mem(0x50)[i] == 0xC3);
+    eeprom_capabilities_t verify;
+    CHECK(eeprom_read_capabilities(0x50, &verify));
+    CHECK(eeprom_validate_self_reference(&verify));
+    CHECK(strcmp(eeprom_ic_name(&verify.components[0]), "M24128-U") == 0);
+    CHECK(verify.timestamp == caps.timestamp && verify.component_count == CAP_MAX_COMPONENTS);
+    CHECK(memcmp(verify.components, caps.components, sizeof(caps.components)) == 0);
+    for (size_t i = 0; i < sizeof(verify.unique_id); i++) CHECK(verify.unique_id[i] == 0);
+    CHECK(eeprom_update_ic_status_at(0x50, CAT_TEMP, TEMP_MCP9808, 0x19, IC_STATUS_FAILED));
+    CHECK(eeprom_read_capabilities(0x50, &verify));
+    CHECK(verify.components[4].status == IC_STATUS_FAILED);
+    // Addressable 24AA at 0x51 and an RTC-like blank image at 0x57 coexist.
+    make_test_board(&caps);
+    caps.i2c_address = 0x51;
+    caps.components[0] = IC_EEPROM_SELF_24AA025E64(0x51);
+    mock_set_present(0x51, true);
+    mock_set_present(0x57, true);
+    CHECK(eeprom_write_capabilities(0x51, &caps, false));
+    eeprom_capabilities_t boards[8];
+    CHECK(eeprom_scan_bus(boards, 8) == 2);
+    CHECK(boards[0].i2c_address == 0x50 && boards[1].i2c_address == 0x51);
+    CHECK(boards[0].components[0].id == MEMORY_M24128_U);
+    CHECK(boards[1].components[0].id == MEMORY_24AA025E64);
+    CHECK(eeprom_set_profile(0x50, EEPROM_PROFILE_24AAXXE64) == ESP_OK);
+}
+
 static void test_cs128_guards(void) {
     TEST_BEGIN("24CS128 capacity, protection, dirty images and read/write faults");
     mock_reset();
@@ -713,6 +768,57 @@ static void test_cs128_guards(void) {
     CHECK(eeprom_set_profile(0x50, EEPROM_PROFILE_24AAXXE64) == ESP_OK);
 }
 
+static void test_st_identity_and_protection(void) {
+    TEST_BEGIN("M24128-U UID header, address straps, WC, bounds and bus faults");
+    mock_reset();
+    for (uint8_t addr = 0x50; addr <= 0x57; addr++) {
+        mock_set_st_present(addr);
+        CHECK(eeprom_set_profile(addr, EEPROM_PROFILE_M24128_U) == ESP_OK);
+        eeprom_factory_id_t id;
+        CHECK(eeprom_read_factory_id(addr, &id));
+        CHECK(id.kind == EEPROM_FACTORY_ID_ST_UID128 && id.length == 16);
+        CHECK(!memcmp(id.bytes, mock_serial(addr), 16));
+        const mock_write_txn_t *read = mock_read_txn(mock_read_txn_count()-1);
+        CHECK(read->dev_addr == addr+8 && read->mem_addr == 0 && read->address_len == 2);
+        uint8_t eui[8]; CHECK(!eeprom_read_unique_id(addr, eui));
+        mock_serial(addr)[2] ^= 1; // Wrong density must not qualify.
+        CHECK(!eeprom_read_factory_id(addr, &id) && id.kind == EEPROM_FACTORY_ID_NONE);
+        mock_serial(addr)[2] ^= 1;
+        mock_fail_receive_at_memaddr(0);
+        CHECK(!eeprom_read_factory_id(addr, &id));
+        CHECK(eeprom_set_profile(addr, EEPROM_PROFILE_24AAXXE64) == ESP_OK);
+    }
+    CHECK(mock_write_txn_count() == 0);
+    mock_reset(); mock_set_st_present(0x50);
+    CHECK(eeprom_set_profile(0x50, EEPROM_PROFILE_M24128_U) == ESP_OK);
+    uint8_t data[100], verify[100];
+    memset(data, 0x6a, sizeof data);
+    CHECK(eeprom_write_bytes(0x50, 0x13f, data, sizeof data) == ESP_OK);
+    CHECK(mock_write_txn_count() == 3);
+    CHECK(eeprom_read_bytes(0x50, 0x13f, verify, sizeof verify) == ESP_OK);
+    CHECK(!memcmp(data, verify, sizeof data));
+    CHECK(eeprom_write_bytes(0x50, 0x3fff, data, 1) == ESP_OK);
+    CHECK(eeprom_write_bytes(0x50, 0x3fff, data, 2) == ESP_ERR_INVALID_SIZE);
+    CHECK(eeprom_read_bytes(0x50, 0x4000, verify, 1) == ESP_ERR_INVALID_SIZE);
+    eeprom_capabilities_t caps; make_test_board(&caps);
+    caps.components[0] = IC_EEPROM_SELF_24CS128(0x50);
+    CHECK(!eeprom_write_capabilities(0x50, &caps, true));
+    caps.components[0] = IC_EEPROM_SELF_M24128_U(0x50);
+    CHECK(eeprom_write_capabilities(0x50, &caps, false));
+    mock_set_write_protected(0x50, true);
+    CHECK(eeprom_write_bytes(0x50, 0, data, 1) == ESP_ERR_INVALID_RESPONSE);
+    CHECK(!eeprom_update_ic_status(0x50, CAT_IMU, IMU_ICM20948, IC_STATUS_FAILED));
+    caps.revision++; CHECK(!eeprom_write_capabilities(0x50, &caps, true));
+    mock_set_write_protected(0x50, false);
+    mock_fail_transmit_at_memaddr(16);
+    CHECK(!eeprom_write_capabilities(0x50, &caps, true));
+    for (int i = 0; i < mock_read_txn_count(); i++) {
+        CHECK(mock_read_txn(i)->dev_addr == 0x50); // Never read Microchip config on ST.
+    }
+    for (int i = 0; i < mock_write_txn_count(); i++) CHECK(mock_write_txn(i)->dev_addr == 0x50);
+    CHECK(eeprom_set_profile(0x50, EEPROM_PROFILE_24AAXXE64) == ESP_OK);
+}
+
 int main(void) {
     test_r009_uninitialized_and_init();
     test_r001_r002_write_layout();
@@ -731,6 +837,8 @@ int main(void) {
     test_cs128_identity();
     test_cs128_manifest();
     test_cs128_guards();
+    test_st_manifest();
+    test_st_identity_and_protection();
 
     printf("\n%s: %d failure(s)\n", s_failures ? "FAILED" : "ALL TESTS PASSED",
            s_failures);

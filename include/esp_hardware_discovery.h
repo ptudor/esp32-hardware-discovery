@@ -41,17 +41,23 @@ extern "C" {
 #define EEPROM_24CS128_SERIAL_SIZE      16
 #define EEPROM_24CS128_SERIAL_START 0x0800
 
+#define EEPROM_M24128_U_SIZE       16384
+#define EEPROM_M24128_U_PAGE_SIZE      64
+#define EEPROM_M24128_U_UID_START  0x0000
+
 // Select from known board/assembly information before accessing the device.
 // The default preserves the common 24AA02E64/24AA025E64 wire protocol.
 typedef enum {
     EEPROM_PROFILE_24AAXXE64 = 0,
     EEPROM_PROFILE_24CS128 = 1,
+    EEPROM_PROFILE_M24128_U = 2,
 } eeprom_profile_t;
 
 typedef enum {
     EEPROM_FACTORY_ID_NONE = 0,
     EEPROM_FACTORY_ID_EUI64 = 1,
     EEPROM_FACTORY_ID_SERIAL128 = 2,
+    EEPROM_FACTORY_ID_ST_UID128 = 3,
 } eeprom_factory_id_kind_t;
 
 typedef struct {
@@ -85,7 +91,7 @@ typedef struct {
 #endif
 
 // ============================================================================
-// MANIFEST LAYOUT (first 256 bytes; unchanged on 24CS128)
+// MANIFEST LAYOUT (first 256 bytes; unchanged on 24CS128 and M24128-U)
 // ============================================================================
 
 // HEADER (16 bytes):
@@ -104,7 +110,7 @@ typedef struct {
 // FOOTER (16 bytes):
 // Bytes 240-247: Reserved (random from QA testing - future: crypto seed, batch code, etc.)
 // Bytes 248-255: 8-byte unique ID (factory programmed, read-only)
-// On 24CS128, bytes 248-255 are unused by this format. Its factory serial is
+// On 24CS128 and M24128-U, bytes 248-255 are unused by this format. Its factory serial is
 // separate from the main array; use eeprom_read_factory_id().
 
 #define CAP_OFFSET_MAGIC        0
@@ -408,6 +414,7 @@ typedef enum {
     MEMORY_W25Q128      = 5,        // SPI Flash
     MEMORY_24AA025E64   = 6,        // Addressable EUI-64 manifest EEPROM
     MEMORY_24CS128      = 7,        // 16 KiB EEPROM with separate 128-bit serial
+    MEMORY_M24128_U     = 8,        // ST 16 KiB EEPROM with read-only 128-bit UID
 } eeprom_memory_id_t;
 
 // MCU (CAT_MCU = 17)
@@ -512,7 +519,7 @@ typedef struct {
                                  // (persisted at bytes 8-15, little-endian)
     eeprom_ic_descriptor_t components[CAP_MAX_COMPONENTS];
 
-    // 24AA 64-bit EUI only; zero on 24CS128. For board identity on either
+    // 24AA 64-bit EUI only; zero on 24CS128 and M24128-U. For board identity on either
     // profile use eeprom_read_factory_id(), preserving its kind and length.
     uint8_t unique_id[8];
 
@@ -564,6 +571,9 @@ typedef struct {
 #define IC_EEPROM_SELF_24AA025E64(addr) \
     IC_EEPROM_SELF_TYPE(MEMORY_24AA025E64, addr)
 
+#define IC_EEPROM_SELF_M24128_U(addr) \
+    IC_EEPROM_SELF_TYPE(MEMORY_M24128_U, addr)
+
 #define IC_EEPROM_SELF_24CS128(addr) \
     IC_EEPROM_SELF_TYPE(MEMORY_24CS128, addr)
 
@@ -604,7 +614,7 @@ esp_err_t eeprom_discovery_init(i2c_master_bus_handle_t bus_handle);
 /**
  * @brief Select the wire protocol at one main-array address (0x50-0x57)
  *
- * Call after init and before scanning, reading or provisioning a 24CS128.
+ * Call after init and before scanning, reading or provisioning a 24CS128 or M24128-U.
  * Other addresses retain the default 24AA profile. No I2C traffic is sent;
  * an ACK or a manifest cannot safely select the word-address width.
  * Selection persists until changed. Configure before starting worker tasks.
@@ -616,7 +626,8 @@ esp_err_t eeprom_set_profile(uint8_t i2c_addr, eeprom_profile_t profile);
 /**
  * @brief Read the selected EEPROM's complete factory board identity
  *
- * Returns EUI64/8 bytes on 24AA, SERIAL128/16 bytes on 24CS128. The latter
+ * Returns EUI64/8 bytes on 24AA, SERIAL128/16 bytes on 24CS128 or
+ * ST_UID128/16 bytes on M24128-U. The 128-bit identities
  * uses security address 0x58 + the main address's A2/A1/A0 bits and word
  * address 0x0800. Use every returned byte; SERIAL128 is not an EUI or UUID.
  * Independent of manifest contents; the RTC identity is not read or used.

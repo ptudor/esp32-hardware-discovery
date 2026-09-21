@@ -23,6 +23,7 @@ void mock_reset(void);
 
 // Make a device at dev_addr respond (or stop responding) on the bus.
 void mock_set_present(uint8_t dev_addr, bool present);
+void mock_set_st_present(uint8_t dev_addr);
 void mock_set_cs128_present(uint8_t dev_addr);
 void mock_set_cs128_config(uint8_t dev_addr, uint16_t config);
 void mock_set_write_protected(uint8_t dev_addr, bool protected);

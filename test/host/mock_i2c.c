@@ -39,6 +39,7 @@ struct mock_i2c_dev { uint8_t addr; };
 typedef struct {
     bool present;
     bool cs128;
+    bool st;
     bool write_protected;
     uint8_t mem[MOCK_CS128_SIZE];
     uint8_t serial[16];
@@ -76,7 +77,7 @@ static void canary_exit(void) {
 static mock_eeprom_t *device_at(uint16_t addr) {
     if (addr >= 0x58 && addr <= 0x5F) {
         mock_eeprom_t *dev = &s_eeproms[addr - 0x58];
-        return dev->cs128 ? dev : NULL;
+        return (dev->cs128 || dev->st) ? dev : NULL;
     }
     if (addr < MOCK_EEPROM_BASE || addr >= MOCK_EEPROM_BASE + MOCK_EEPROM_COUNT) {
         return NULL;
@@ -124,6 +125,13 @@ void mock_set_cs128_present(uint8_t dev_addr) {
     for (size_t i = 0; i < sizeof(dev->serial); i++) {
         dev->serial[i] = (uint8_t)(0xA0 + i + dev_addr - MOCK_EEPROM_BASE);
     }
+}
+
+void mock_set_st_present(uint8_t addr) {
+    mock_set_cs128_present(addr);
+    device_at(addr)->cs128 = false;
+    device_at(addr)->st = true;
+    memcpy(device_at(addr)->serial, "\x20\xe0\x0e\xff", 4);
 }
 
 void mock_set_cs128_config(uint8_t dev_addr, uint16_t config) {
@@ -214,7 +222,7 @@ esp_err_t i2c_master_transmit(i2c_master_dev_handle_t dev,
 
     esp_err_t result = ESP_OK;
     mock_eeprom_t *eeprom = device_at(dev->addr);
-    size_t address_len = eeprom != NULL && eeprom->cs128 ? 2 : 1;
+    size_t address_len = eeprom != NULL && (eeprom->cs128 || eeprom->st) ? 2 : 1;
     uint16_t mem_addr = data != NULL && len >= address_len ?
         (address_len == 2 ? ((uint16_t)data[0] << 8) | data[1] : data[0]) : 0;
 
@@ -222,6 +230,8 @@ esp_err_t i2c_master_transmit(i2c_master_dev_handle_t dev,
         result = ESP_ERR_NOT_FOUND;
     } else if (data == NULL || len < address_len || dev->addr >= 0x58) {
         result = ESP_ERR_INVALID_ARG;
+    } else if (eeprom->st && eeprom->write_protected && len > address_len) {
+        result = ESP_ERR_INVALID_RESPONSE;
     } else if (s_fail_transmit_memaddr >= 0 &&
                mem_addr == s_fail_transmit_memaddr) {
         s_fail_transmit_memaddr = -1;
@@ -238,8 +248,8 @@ esp_err_t i2c_master_transmit(i2c_master_dev_handle_t dev,
         }
 
         // Real page wraparound: 8-byte 24AA common denominator or 64-byte CS128.
-        size_t page_size = eeprom->cs128 ? 64 : 8;
-        size_t capacity = eeprom->cs128 ? MOCK_CS128_SIZE : MOCK_EEPROM_SIZE;
+        size_t page_size = (eeprom->cs128 || eeprom->st) ? 64 : 8;
+        size_t capacity = (eeprom->cs128 || eeprom->st) ? MOCK_CS128_SIZE : MOCK_EEPROM_SIZE;
         for (size_t i = 0; i < data_len; i++) {
             size_t dest = ((mem_addr / page_size) * page_size + (mem_addr + i) % page_size) % capacity;
             bool swp = eeprom->cs128 && (eeprom->config[0] & 2) &&
@@ -267,7 +277,7 @@ esp_err_t i2c_master_transmit_receive(i2c_master_dev_handle_t dev,
 
     esp_err_t result = ESP_OK;
     mock_eeprom_t *eeprom = device_at(dev->addr);
-    size_t address_len = eeprom != NULL && eeprom->cs128 ? 2 : 1;
+    size_t address_len = eeprom != NULL && (eeprom->cs128 || eeprom->st) ? 2 : 1;
     uint16_t mem_addr = tx != NULL && tx_len == address_len ?
         (address_len == 2 ? ((uint16_t)tx[0] << 8) | tx[1] : tx[0]) : 0;
 
@@ -286,16 +296,17 @@ esp_err_t i2c_master_transmit_receive(i2c_master_dev_handle_t dev,
             };
         }
         if (dev->addr >= 0x58) {
-            if (mem_addr == 0x0800 && rx_len == 16) {
+            if (((eeprom->cs128 && mem_addr == 0x0800) ||
+                 (eeprom->st && (mem_addr & 0x3f) == 0)) && rx_len == 16) {
                 memcpy(rx, eeprom->serial, rx_len);
-            } else if (mem_addr == 0x8800 && rx_len == 2) {
+            } else if (eeprom->cs128 && mem_addr == 0x8800 && rx_len == 2) {
                 memcpy(rx, eeprom->config, rx_len);
             } else {
                 result = ESP_ERR_INVALID_ARG;
             }
         } else {
             // Sequential reads roll over the entire array, not the page.
-            size_t capacity = eeprom->cs128 ? MOCK_CS128_SIZE : MOCK_EEPROM_SIZE;
+            size_t capacity = (eeprom->cs128 || eeprom->st) ? MOCK_CS128_SIZE : MOCK_EEPROM_SIZE;
             for (size_t i = 0; i < rx_len; i++) {
                 rx[i] = eeprom->mem[(mem_addr + i) % capacity];
             }

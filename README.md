@@ -1,7 +1,7 @@
 # ESP Hardware Discovery Component
 
 ESP-IDF managed component for hardware capability discovery using 4-byte IC
-descriptors stored in Microchip 24AA02E64, 24AA025E64 or 24CS128 EEPROM.
+descriptors stored in Microchip 24AA02E64, 24AA025E64, 24CS128 or ST M24128-U EEPROM.
 
 ## Features
 
@@ -449,3 +449,27 @@ Patrick Tudor (www.ptudor.net)
 ## Changelog
 
 See CHANGELOG.md for version history.
+
+## ST M24128-U
+
+Select `EEPROM_PROFILE_M24128_U` before accessing an independently identified
+M24128-UFMN6TP, and use `IC_EEPROM_SELF_M24128_U(address)` (memory catalog ID 8).
+The main array is 16 KiB, with two-byte word addresses and 64-byte write pages.
+Writes use bounded ACK polling and manifest/status readback. The first 256-byte
+manifest layout is unchanged; bytes 248 onward are not used as a legacy EUI.
+
+`eeprom_read_factory_id()` returns `EEPROM_FACTORY_ID_ST_UID128` and all 16 UID
+bytes from identification-page offset 0 at main address + 8. It validates the
+`20 e0 0e ff` header. Upper identification-page address bits alias, so a successful
+read at Microchip's offset cannot establish a Microchip model. This library uses
+explicit profiles; callers must qualify the chip before selecting one. No ST
+identification-page writes or Microchip protection-register accesses are issued.
+
+Pin 7 is WC: low enables array writes, high inhibits them. ST permits floating WC,
+but keep a defined low/high connection for assemblies shared with Microchip WP.
+The exact MN SO8N package uses the standard eight-pin EEPROM pinout.
+
+Source: [ST M24128-U datasheet](https://www.st.com/resource/en/datasheet/m24128-u.pdf).
+Host tests simulate reads, page wrap, WC data NACK, busy polling, invalid headers,
+wrong profiles and faults. Physical qualification on an assembled board remains
+required before production use.
