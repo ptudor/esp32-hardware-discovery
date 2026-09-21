@@ -40,6 +40,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `24CS128` support (`MEMORY_24CS128 = 7`) with explicit per-address
+  `eeprom_set_profile()`, two-byte addressing, 64-byte page splitting,
+  protection checks and a part-specific self-reference macro.
+- `eeprom_read_factory_id()` returns a typed 64-bit EUI for 24AA parts or
+  the full 128-bit CS128 serial for use as board identity. The existing
+  capabilities struct and 8-byte EUI API retain their sizes; CS128 callers
+  use the new API. The manifest layout and extra storage remain unchanged.
+- CS128 host simulation and tests for identity reads, mixed-bus scans,
+  capacity/page boundaries, protection and failed/interrupted transactions.
 - Addressable `24AA025E64` support with stable `MEMORY_24AA025E64 = 6`,
   part-specific self-reference helpers, validation, name mapping, and host tests
 - Non-addressable `24AA02E64` alias simulation in the host I2C mock

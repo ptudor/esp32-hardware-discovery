@@ -3,8 +3,7 @@
  * @brief Hardware capability discovery with 4-byte IC descriptors
  * @version 1.0.0
  *
- * Implementation for reading/writing board capabilities to 24AA02E64 and
- * 24AA025E64 EEPROMs
+ * Implementation for 24AA02E64, 24AA025E64 and 24CS128 manifest EEPROMs
  */
 
 #include "esp_hardware_discovery.h"
@@ -21,16 +20,19 @@ static const char *TAG = "EEPROM_CAP";
 
 // I2C parameters
 #define I2C_MASTER_TIMEOUT_MS           100
-#define EEPROM_PAGE_SIZE                EEPROM_24AA02E64_PAGE_SIZE // Safe for both parts
+#define EEPROM_PAGE_SIZE                EEPROM_24AA02E64_PAGE_SIZE // 24AA common denominator
 #define EEPROM_WRITE_CYCLE_TIMEOUT_MS   6   // Twc max is 5ms; +1ms margin
 #define EEPROM_ADDR_COUNT               8   // 24AA025E64 address-pin range
+#define EEPROM_SECURITY_ADDR_BASE      0x58
+#define EEPROM_CS128_CONFIG_START      0x8800
 
 // ============================================================================
 // MODULE STATE (set up by eeprom_discovery_init)
 // ============================================================================
 
 static i2c_master_bus_handle_t s_bus = NULL;
-static i2c_master_dev_handle_t s_devices[EEPROM_ADDR_COUNT] = { NULL };
+static i2c_master_dev_handle_t s_devices[2 * EEPROM_ADDR_COUNT] = { NULL };
+static eeprom_profile_t s_profiles[EEPROM_ADDR_COUNT] = { EEPROM_PROFILE_24AAXXE64 };
 static SemaphoreHandle_t s_lock = NULL;
 
 esp_err_t eeprom_discovery_init(i2c_master_bus_handle_t bus_handle) {
@@ -70,6 +72,30 @@ static void eeprom_unlock(void) {
     xSemaphoreGive(s_lock);
 }
 
+static bool eeprom_valid_address(uint8_t i2c_addr) {
+    return i2c_addr >= EEPROM_I2C_ADDR_0 && i2c_addr <= EEPROM_I2C_ADDR_7;
+}
+
+static bool eeprom_is_cs128(uint8_t i2c_addr) {
+    return eeprom_valid_address(i2c_addr) &&
+           s_profiles[i2c_addr - EEPROM_I2C_ADDR_BASE] == EEPROM_PROFILE_24CS128;
+}
+
+esp_err_t eeprom_set_profile(uint8_t i2c_addr, eeprom_profile_t profile) {
+    if (!eeprom_valid_address(i2c_addr) ||
+        (profile != EEPROM_PROFILE_24AAXXE64 && profile != EEPROM_PROFILE_24CS128)) {
+        ESP_LOGE(TAG, "Invalid EEPROM address/profile selection");
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!eeprom_check_init()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    eeprom_lock();
+    s_profiles[i2c_addr - EEPROM_I2C_ADDR_BASE] = profile;
+    eeprom_unlock();
+    return ESP_OK;
+}
+
 // ============================================================================
 // LOW-LEVEL I2C FUNCTIONS (callers must hold the module lock)
 // ============================================================================
@@ -78,8 +104,8 @@ static void eeprom_unlock(void) {
  * @brief Get (lazily creating) the device handle for an EEPROM address
  */
 static i2c_master_dev_handle_t eeprom_get_device(uint8_t i2c_addr) {
-    if (i2c_addr < EEPROM_I2C_ADDR_0 || i2c_addr > EEPROM_I2C_ADDR_7) {
-        ESP_LOGE(TAG, "Address 0x%02X outside manifest EEPROM range 0x50-0x57", i2c_addr);
+    if (i2c_addr < EEPROM_I2C_ADDR_0 || i2c_addr >= EEPROM_SECURITY_ADDR_BASE + EEPROM_ADDR_COUNT) {
+        ESP_LOGE(TAG, "Address 0x%02X outside EEPROM interfaces 0x50-0x5F", i2c_addr);
         return NULL;
     }
 
@@ -106,7 +132,7 @@ static i2c_master_dev_handle_t eeprom_get_device(uint8_t i2c_addr) {
 /**
  * @brief ACK-poll until the EEPROM finishes its internal write cycle
  *
- * After a page write either supported EEPROM NACKs its own address until the
+ * After a page write each supported EEPROM NACKs its own address until the
  * write cycle (Twc, max 5ms) completes.
  */
 static esp_err_t eeprom_wait_write_complete(uint8_t i2c_addr) {
@@ -123,31 +149,66 @@ static esp_err_t eeprom_wait_write_complete(uint8_t i2c_addr) {
     return ESP_ERR_TIMEOUT;
 }
 
-/**
- * @brief Write bytes to EEPROM
- *
- * Splits the write into transactions that respect the 24AA02E64's 8-byte
- * page buffer, the smaller of the two supported variants. This is also safe
- * on the 24AA025E64's 16-byte pages. Each transaction carries at most eight
- * data bytes and never crosses an 8-byte boundary. ACK-polls after every
- * chunk.
- */
-static esp_err_t eeprom_write_bytes(uint8_t i2c_addr, uint8_t mem_addr,
+// Combined transactions end with STOP; the address phase and read are joined
+// by a repeated START, as required for security/configuration random reads.
+static esp_err_t eeprom_cs128_read_register(uint8_t i2c_addr, uint16_t word_addr,
+                                            uint8_t *data, size_t len) {
+    i2c_master_dev_handle_t dev = eeprom_get_device(i2c_addr + 8);
+    if (dev == NULL) {
+        return ESP_FAIL;
+    }
+    uint8_t address[2] = { (uint8_t)(word_addr >> 8), (uint8_t)word_addr };
+    return i2c_master_transmit_receive(dev, address, sizeof(address), data, len,
+                                       I2C_MASTER_TIMEOUT_MS);
+}
+
+// Inspect enhanced protection; never change configuration or lock registers.
+// In hardware protection mode WP must be low on the board; verify writes too.
+static esp_err_t eeprom_cs128_check_write(uint8_t i2c_addr, uint16_t mem_addr, size_t len) {
+    uint8_t config[2];
+    esp_err_t ret = eeprom_cs128_read_register(i2c_addr, EEPROM_CS128_CONFIG_START,
+                                               config, sizeof(config));
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Cannot read 24CS128 write protection at 0x%02X", i2c_addr);
+        return ret;
+    }
+    if (config[0] & 0x02) { // EWPM, bit 9 of the 16-bit register
+        for (size_t zone = mem_addr / 2048; zone <= (mem_addr + len - 1) / 2048; zone++) {
+            if (config[1] & (1U << zone)) {
+                ESP_LOGE(TAG, "24CS128 zone %u is write-protected", (unsigned)zone);
+                return ESP_ERR_INVALID_STATE;
+            }
+        }
+    }
+    return ESP_OK;
+}
+
+/** Write within 8-byte 24AA or 64-byte CS128 pages, ACK-polling each chunk. */
+static esp_err_t eeprom_write_bytes(uint8_t i2c_addr, uint16_t mem_addr,
                                      const uint8_t *data, size_t len) {
-    if (data == NULL || len == 0) {
+    if (data == NULL || len == 0 || !eeprom_valid_address(i2c_addr)) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    if ((size_t)mem_addr + len > EEPROM_24AAXXE64_SIZE) {
-        ESP_LOGE(TAG, "Write out of bounds: addr %u + len %zu > %d",
-                 mem_addr, len, EEPROM_24AAXXE64_SIZE);
+    bool cs128 = eeprom_is_cs128(i2c_addr);
+    size_t capacity = cs128 ? EEPROM_24CS128_SIZE : EEPROM_24AAXXE64_SIZE;
+    if (mem_addr >= capacity || len > capacity - mem_addr) {
+        ESP_LOGE(TAG, "Write out of bounds: addr %u + len %zu > %zu",
+                 mem_addr, len, capacity);
         return ESP_ERR_INVALID_SIZE;
     }
 
-    if ((size_t)mem_addr + len > EEPROM_UNIQUE_ID_START) {
+    if (!cs128 && (size_t)mem_addr + len > EEPROM_UNIQUE_ID_START) {
         ESP_LOGE(TAG, "Write overlaps factory unique ID region (0x%02X-0xFF)",
                  EEPROM_UNIQUE_ID_START);
         return ESP_ERR_INVALID_ARG;
+    }
+
+    if (cs128) {
+        esp_err_t ret = eeprom_cs128_check_write(i2c_addr, mem_addr, len);
+        if (ret != ESP_OK) {
+            return ret;
+        }
     }
 
     i2c_master_dev_handle_t dev = eeprom_get_device(i2c_addr);
@@ -156,20 +217,25 @@ static esp_err_t eeprom_write_bytes(uint8_t i2c_addr, uint8_t mem_addr,
     }
 
     size_t written = 0;
+    size_t page_size = cs128 ? EEPROM_24CS128_PAGE_SIZE : EEPROM_PAGE_SIZE;
+    size_t address_size = cs128 ? 2 : 1;
 
     while (written < len) {
-        uint8_t addr = mem_addr + written;
-        size_t page_remaining = EEPROM_PAGE_SIZE - (addr % EEPROM_PAGE_SIZE);
+        uint16_t addr = mem_addr + written;
+        size_t page_remaining = page_size - (addr % page_size);
         size_t chunk = len - written;
         if (chunk > page_remaining) {
             chunk = page_remaining;
         }
 
-        uint8_t buf[1 + EEPROM_PAGE_SIZE];
-        buf[0] = addr;
-        memcpy(&buf[1], &data[written], chunk);
+        uint8_t buf[2 + EEPROM_24CS128_PAGE_SIZE];
+        buf[0] = cs128 ? (uint8_t)(addr >> 8) : (uint8_t)addr;
+        if (cs128) {
+            buf[1] = (uint8_t)addr;
+        }
+        memcpy(&buf[address_size], &data[written], chunk);
 
-        esp_err_t ret = i2c_master_transmit(dev, buf, 1 + chunk,
+        esp_err_t ret = i2c_master_transmit(dev, buf, address_size + chunk,
                                             I2C_MASTER_TIMEOUT_MS);
         if (ret != ESP_OK) {
             return ret;
@@ -192,15 +258,17 @@ static esp_err_t eeprom_write_bytes(uint8_t i2c_addr, uint8_t mem_addr,
  * Sequential reads are not limited by the page buffer; a single transaction
  * may cover any in-bounds range.
  */
-static esp_err_t eeprom_read_bytes(uint8_t i2c_addr, uint8_t mem_addr,
+static esp_err_t eeprom_read_bytes(uint8_t i2c_addr, uint16_t mem_addr,
                                     uint8_t *data, size_t len) {
-    if (data == NULL || len == 0) {
+    if (data == NULL || len == 0 || !eeprom_valid_address(i2c_addr)) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    if ((size_t)mem_addr + len > EEPROM_24AAXXE64_SIZE) {
-        ESP_LOGE(TAG, "Read out of bounds: addr %u + len %zu > %d",
-                 mem_addr, len, EEPROM_24AAXXE64_SIZE);
+    bool cs128 = eeprom_is_cs128(i2c_addr);
+    size_t capacity = cs128 ? EEPROM_24CS128_SIZE : EEPROM_24AAXXE64_SIZE;
+    if (mem_addr >= capacity || len > capacity - mem_addr) {
+        ESP_LOGE(TAG, "Read out of bounds: addr %u + len %zu > %zu",
+                 mem_addr, len, capacity);
         return ESP_ERR_INVALID_SIZE;
     }
 
@@ -209,7 +277,9 @@ static esp_err_t eeprom_read_bytes(uint8_t i2c_addr, uint8_t mem_addr,
         return ESP_FAIL;
     }
 
-    return i2c_master_transmit_receive(dev, &mem_addr, 1, data, len,
+    uint8_t address[2] = { (uint8_t)(mem_addr >> 8), (uint8_t)mem_addr };
+    return i2c_master_transmit_receive(dev, cs128 ? address : &address[1],
+                                       cs128 ? 2 : 1, data, len,
                                        I2C_MASTER_TIMEOUT_MS);
 }
 
@@ -223,8 +293,9 @@ static bool eeprom_probe(uint8_t i2c_addr) {
 /**
  * @brief Read the magic byte and classify the device state
  *
- * "Blank" means every writable byte is the same erased/unprogrammed fill
- * value (0xFF or 0x00). If the magic says blank but any other writable byte
+ * "Blank" means every byte in the existing 248-byte manifest region has
+ * the same erased/unprogrammed fill (extra CS128 capacity is left alone).
+ * If the magic says blank (0xFF or 0x00) but any other byte in that region
  * differs, a write was interrupted or an old image was only partly erased;
  * provisioning must require explicit recovery rather than overwrite it.
  */
@@ -260,6 +331,10 @@ static eeprom_program_state_t eeprom_get_prog_state(uint8_t i2c_addr) {
 // ============================================================================
 
 static bool eeprom_read_unique_id_unlocked(uint8_t i2c_addr, uint8_t *unique_id) {
+    if (eeprom_is_cs128(i2c_addr)) {
+        ESP_LOGW(TAG, "24CS128 has no EUI-64; use eeprom_read_factory_id()");
+        return false;
+    }
     esp_err_t ret = eeprom_read_bytes(i2c_addr, EEPROM_UNIQUE_ID_START,
                                        unique_id, EEPROM_UNIQUE_ID_SIZE);
 
@@ -341,6 +416,16 @@ static bool eeprom_read_capabilities_unlocked(uint8_t i2c_addr,
         free(ic_data);
     }
 
+    // A selected CS128 must describe itself consistently. Also reject a
+    // CS128 descriptor decoded with the 24AA protocol instead of adopting it.
+    bool cs128_self = caps->component_count > 0 &&
+                     caps->components[0].category == CAT_MEMORY &&
+                     caps->components[0].id == MEMORY_24CS128;
+    if (eeprom_is_cs128(i2c_addr) != cs128_self) {
+        ESP_LOGE(TAG, "EEPROM profile/self-reference mismatch at 0x%02X", i2c_addr);
+        return false;
+    }
+
     // Read reserved footer (bytes 240-247)
     ret = eeprom_read_bytes(i2c_addr, CAP_OFFSET_FOOTER,
                              caps->reserved_footer, sizeof(caps->reserved_footer));
@@ -349,7 +434,8 @@ static bool eeprom_read_capabilities_unlocked(uint8_t i2c_addr,
     }
 
     // Read unique ID
-    if (!eeprom_read_unique_id_unlocked(i2c_addr, caps->unique_id)) {
+    if (!eeprom_is_cs128(i2c_addr) &&
+        !eeprom_read_unique_id_unlocked(i2c_addr, caps->unique_id)) {
         ESP_LOGW(TAG, "Failed to read unique ID from 0x%02X", i2c_addr);
     }
 
@@ -366,6 +452,16 @@ static bool eeprom_read_capabilities_unlocked(uint8_t i2c_addr,
 static bool eeprom_write_capabilities_unlocked(uint8_t i2c_addr,
                                                const eeprom_capabilities_t *caps,
                                                bool force) {
+    bool cs128 = eeprom_is_cs128(i2c_addr);
+    bool cs128_self = caps->component_count > 0 &&
+                     caps->components[0].category == CAT_MEMORY &&
+                     caps->components[0].id == MEMORY_24CS128;
+    if (cs128 != cs128_self || (cs128 &&
+        (caps->components[0].i2c_address != i2c_addr ||
+         caps->components[0].status != IC_STATUS_INSTALLED))) {
+        ESP_LOGE(TAG, "EEPROM profile/self-reference mismatch at 0x%02X", i2c_addr);
+        return false;
+    }
     // Check if already programmed. A bus error is NOT "blank": refusing to
     // write is the only safe response, otherwise a transient glitch would
     // bypass the overwrite guard.
@@ -553,6 +649,15 @@ static bool eeprom_update_ic_status_internal(uint8_t i2c_addr,
 
     esp_err_t ret = eeprom_write_bytes(i2c_addr, mem_addr, &new_status, 1);
 
+    if (ret == ESP_OK && eeprom_is_cs128(i2c_addr)) {
+        uint8_t verify;
+        ret = eeprom_read_bytes(i2c_addr, mem_addr, &verify, 1);
+        if (ret == ESP_OK && verify != new_status) {
+            ESP_LOGE(TAG, "24CS128 status read-back verification failed");
+            ret = ESP_FAIL;
+        }
+    }
+
     if (ret == ESP_OK) {
         ESP_LOGI(TAG, "Updated IC status: %s -> %s",
                  eeprom_status_name(old_status),
@@ -598,6 +703,32 @@ bool eeprom_read_unique_id(uint8_t i2c_addr, uint8_t *unique_id) {
     eeprom_unlock();
 
     return ok;
+}
+
+bool eeprom_read_factory_id(uint8_t i2c_addr, eeprom_factory_id_t *identity) {
+    if (identity == NULL) {
+        return false;
+    }
+    memset(identity, 0, sizeof(*identity));
+    if (!eeprom_valid_address(i2c_addr) || !eeprom_check_init()) {
+        return false;
+    }
+    eeprom_factory_id_t result = {0};
+    eeprom_lock();
+    bool cs128 = eeprom_is_cs128(i2c_addr);
+    bool ok = cs128 ?
+        eeprom_cs128_read_register(i2c_addr, EEPROM_24CS128_SERIAL_START,
+                                  result.bytes, EEPROM_24CS128_SERIAL_SIZE) == ESP_OK :
+        eeprom_read_unique_id_unlocked(i2c_addr, result.bytes);
+    eeprom_unlock();
+    if (!ok) {
+        ESP_LOGW(TAG, "Failed to read factory identity from 0x%02X", i2c_addr);
+        return false;
+    }
+    result.kind = cs128 ? EEPROM_FACTORY_ID_SERIAL128 : EEPROM_FACTORY_ID_EUI64;
+    result.length = cs128 ? EEPROM_24CS128_SERIAL_SIZE : EEPROM_UNIQUE_ID_SIZE;
+    *identity = result;
+    return true;
 }
 
 bool eeprom_read_capabilities(uint8_t i2c_addr, eeprom_capabilities_t *caps) {
@@ -1021,6 +1152,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case MEMORY_25LC640:   return "25LC640";
             case MEMORY_W25Q128:   return "W25Q128";
             case MEMORY_24AA025E64: return "24AA025E64";
+            case MEMORY_24CS128:   return "24CS128";
         }
     }
 
@@ -1132,7 +1264,7 @@ bool eeprom_validate_self_reference(const eeprom_capabilities_t *caps) {
     }
 
     if (first->id != MEMORY_24AA02E64 &&
-        first->id != MEMORY_24AA025E64) {
+        first->id != MEMORY_24AA025E64 && first->id != MEMORY_24CS128) {
         ESP_LOGW(TAG, "Component[0] is not a supported manifest EEPROM (found: %s)",
                  eeprom_ic_name(first));
         return false;
@@ -1184,10 +1316,15 @@ void eeprom_print_capabilities(const eeprom_capabilities_t *caps) {
         ESP_LOGI(TAG, "Programmed: [timestamp not set]");
     }
 
-    ESP_LOGI(TAG, "Unique ID: %02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X",
+    if (caps->component_count > 0 && caps->components[0].category == CAT_MEMORY &&
+        caps->components[0].id == MEMORY_24CS128) {
+        ESP_LOGI(TAG, "Board ID: 128-bit serial via eeprom_read_factory_id()");
+    } else {
+        ESP_LOGI(TAG, "64-bit EUI: %02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X",
              caps->unique_id[0], caps->unique_id[1], caps->unique_id[2],
              caps->unique_id[3], caps->unique_id[4], caps->unique_id[5],
              caps->unique_id[6], caps->unique_id[7]);
+    }
 
     ESP_LOGI(TAG, "Components: %d", caps->component_count);
 

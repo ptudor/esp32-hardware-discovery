@@ -36,6 +36,29 @@ extern "C" {
 #define EEPROM_24AAXXE64_WRITABLE_SIZE  248
 #define EEPROM_24AA02E64_PAGE_SIZE        8
 #define EEPROM_24AA025E64_PAGE_SIZE      16
+#define EEPROM_24CS128_SIZE          16384
+#define EEPROM_24CS128_PAGE_SIZE        64
+#define EEPROM_24CS128_SERIAL_SIZE      16
+#define EEPROM_24CS128_SERIAL_START 0x0800
+
+// Select from known board/assembly information before accessing the device.
+// The default preserves the common 24AA02E64/24AA025E64 wire protocol.
+typedef enum {
+    EEPROM_PROFILE_24AAXXE64 = 0,
+    EEPROM_PROFILE_24CS128 = 1,
+} eeprom_profile_t;
+
+typedef enum {
+    EEPROM_FACTORY_ID_NONE = 0,
+    EEPROM_FACTORY_ID_EUI64 = 1,
+    EEPROM_FACTORY_ID_SERIAL128 = 2,
+} eeprom_factory_id_kind_t;
+
+typedef struct {
+    eeprom_factory_id_kind_t kind;
+    uint8_t length;
+    uint8_t bytes[EEPROM_24CS128_SERIAL_SIZE];
+} eeprom_factory_id_t;
 
 // Backward-compatible part-specific size names. Both variants use the same
 // 256-byte array and reserve the final eight bytes for the factory EUI-64.
@@ -55,14 +78,14 @@ extern "C" {
 #define EEPROM_I2C_ADDR_6           0x56
 #define EEPROM_I2C_ADDR_7           0x57
 
-// I2C bus speed used for the EEPROM device (Hz). Both supported variants
+// I2C bus speed used for the EEPROM device (Hz). All supported variants
 // support 100 kHz and 400 kHz. Override at compile time if needed.
 #ifndef EEPROM_DISCOVERY_I2C_SPEED_HZ
 #define EEPROM_DISCOVERY_I2C_SPEED_HZ   100000
 #endif
 
 // ============================================================================
-// MEMORY LAYOUT (256 bytes total)
+// MANIFEST LAYOUT (first 256 bytes; unchanged on 24CS128)
 // ============================================================================
 
 // HEADER (16 bytes):
@@ -81,6 +104,8 @@ extern "C" {
 // FOOTER (16 bytes):
 // Bytes 240-247: Reserved (random from QA testing - future: crypto seed, batch code, etc.)
 // Bytes 248-255: 8-byte unique ID (factory programmed, read-only)
+// On 24CS128, bytes 248-255 are unused by this format. Its factory serial is
+// separate from the main array; use eeprom_read_factory_id().
 
 #define CAP_OFFSET_MAGIC        0
 #define CAP_OFFSET_PROJECT      1
@@ -382,6 +407,7 @@ typedef enum {
     MEMORY_25LC640      = 4,        // SPI EEPROM
     MEMORY_W25Q128      = 5,        // SPI Flash
     MEMORY_24AA025E64   = 6,        // Addressable EUI-64 manifest EEPROM
+    MEMORY_24CS128      = 7,        // 16 KiB EEPROM with separate 128-bit serial
 } eeprom_memory_id_t;
 
 // MCU (CAT_MCU = 17)
@@ -486,7 +512,8 @@ typedef struct {
                                  // (persisted at bytes 8-15, little-endian)
     eeprom_ic_descriptor_t components[CAP_MAX_COMPONENTS];
 
-    // Unique ID (read separately from factory area)
+    // 24AA 64-bit EUI only; zero on 24CS128. For board identity on either
+    // profile use eeprom_read_factory_id(), preserving its kind and length.
     uint8_t unique_id[8];
 
     // Reserved footer (random from QA testing; populated from bytes 240-247 on read)
@@ -537,6 +564,9 @@ typedef struct {
 #define IC_EEPROM_SELF_24AA025E64(addr) \
     IC_EEPROM_SELF_TYPE(MEMORY_24AA025E64, addr)
 
+#define IC_EEPROM_SELF_24CS128(addr) \
+    IC_EEPROM_SELF_TYPE(MEMORY_24CS128, addr)
+
 #define IC_EEPROM_SELF(addr) \
     IC_EEPROM_SELF_24AA02E64(addr)
 
@@ -571,6 +601,29 @@ typedef enum {
  */
 esp_err_t eeprom_discovery_init(i2c_master_bus_handle_t bus_handle);
 
+/**
+ * @brief Select the wire protocol at one main-array address (0x50-0x57)
+ *
+ * Call after init and before scanning, reading or provisioning a 24CS128.
+ * Other addresses retain the default 24AA profile. No I2C traffic is sent;
+ * an ACK or a manifest cannot safely select the word-address width.
+ * Selection persists until changed. Configure before starting worker tasks.
+ * Returns ESP_ERR_INVALID_ARG for an invalid address/profile, or
+ * ESP_ERR_INVALID_STATE before init.
+ */
+esp_err_t eeprom_set_profile(uint8_t i2c_addr, eeprom_profile_t profile);
+
+/**
+ * @brief Read the selected EEPROM's complete factory board identity
+ *
+ * Returns EUI64/8 bytes on 24AA, SERIAL128/16 bytes on 24CS128. The latter
+ * uses security address 0x58 + the main address's A2/A1/A0 bits and word
+ * address 0x0800. Use every returned byte; SERIAL128 is not an EUI or UUID.
+ * Independent of manifest contents; the RTC identity is not read or used.
+ * On failure the output is cleared (kind NONE, length zero).
+ */
+bool eeprom_read_factory_id(uint8_t i2c_addr, eeprom_factory_id_t *identity);
+
 eeprom_program_state_t eeprom_get_program_state(uint8_t i2c_addr);
 
 /**
@@ -584,6 +637,8 @@ bool eeprom_is_programmed(uint8_t i2c_addr);
 
 bool eeprom_read_capabilities(uint8_t i2c_addr, eeprom_capabilities_t *caps);
 
+// 8-byte EUI API: returns false without modifying the output on
+// 24CS128. Use eeprom_read_factory_id() to support either identity width.
 bool eeprom_read_unique_id(uint8_t i2c_addr, uint8_t *unique_id);
 
 /**
@@ -610,7 +665,9 @@ bool eeprom_write_capabilities(uint8_t i2c_addr,
 /**
  * @brief Scan the 0x50-0x57 manifest EEPROM address block
  *
- * Addressable 24AA025E64 devices are returned independently. A 24AA02E64
+ * Addressable 24AA025E64 and explicitly configured 24CS128 devices are
+ * returned independently. Security addresses 0x58-0x5F are not scanned.
+ * A 24AA02E64
  * ignores the three select bits and ACKs every address in the block, so the
  * scan records that physical device once and stops.
  */

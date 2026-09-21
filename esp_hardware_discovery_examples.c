@@ -1,6 +1,6 @@
 /**
  * @file esp_hardware_discovery_examples.c
- * @brief Usage examples for 24AA02E64/24AA025E64 capability discovery
+ * @brief Usage examples for 24AA02E64/24AA025E64/24CS128 capability discovery
  *
  * Reference only - this file is not compiled as part of the component.
  * Copy the pieces you need into your application (it defines app_main,
@@ -14,6 +14,22 @@
 #include "freertos/task.h"
 
 static const char *TAG = "EEPROM_EXAMPLES";
+
+// Call after eeprom_discovery_init(), before any bus scan or provisioning.
+// Assembly information selects the fitted EEPROM; an ACK cannot identify it.
+bool example_select_eeprom_and_read_board_id(bool fitted_cs128,
+                                              eeprom_factory_id_t *board_id) {
+    eeprom_profile_t profile = fitted_cs128 ? EEPROM_PROFILE_24CS128 :
+                                            EEPROM_PROFILE_24AAXXE64;
+    if (eeprom_set_profile(0x50, profile) != ESP_OK) {
+        return false;
+    }
+    // For manufacturing, pair the profile with IC_EEPROM_SELF_24CS128(0x50)
+    // or IC_EEPROM_SELF_24AA025E64(0x50) in components[0].
+    // CS128's full 16 bytes are the board ID; 24AA returns an 8-byte EUI.
+    // Persist/compare kind, length, and every returned byte; handle failure.
+    return eeprom_read_factory_id(0x50, board_id);
+}
 
 // ============================================================================
 // EXAMPLE 1: Manufacturing - Program a Shepherd Rover Board

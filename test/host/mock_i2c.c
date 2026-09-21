@@ -1,12 +1,12 @@
 /**
- * Simulated 24AA02E64/24AA025E64 EEPROMs behind the ESP-IDF i2c_master API,
+ * Simulated 24AA02E64/24AA025E64/24CS128 behind the ESP-IDF i2c_master API,
  * plus the FreeRTOS primitives the module under test needs. Addressable mock
  * devices respond at one selected address; the non-addressable mock models a
  * single 24AA02E64 aliasing across the complete 0x50-0x57 block.
  *
- * The write path faithfully models the device's 8-byte page buffer: a write
+ * The write path models 8-byte 24AA and 64-byte CS128 page buffers: a write
  * transaction that carries more bytes than fit in the addressed page wraps
- * around WITHIN the page (the address pointer's low 3 bits increment, the
+ * around WITHIN the page (the address pointer's low 3 or 6 bits increment, the
  * high bits stay frozen), exactly like the real silicon. Code that does not
  * chunk its writes correctly therefore corrupts the simulated image the same
  * way it would corrupt a real board.
@@ -38,12 +38,16 @@ struct mock_i2c_dev { uint8_t addr; };
 
 typedef struct {
     bool present;
-    uint8_t mem[MOCK_EEPROM_SIZE];
+    bool cs128;
+    bool write_protected;
+    uint8_t mem[MOCK_CS128_SIZE];
+    uint8_t serial[16];
+    uint8_t config[2];
     int busy_probes;    // probes to NACK before the write cycle "completes"
 } mock_eeprom_t;
 
 static struct mock_i2c_bus s_bus_obj;
-static struct mock_i2c_dev s_dev_objs[MOCK_EEPROM_COUNT];
+static struct mock_i2c_dev s_dev_objs[2 * MOCK_EEPROM_COUNT];
 static mock_eeprom_t s_eeproms[MOCK_EEPROM_COUNT];
 static mock_eeprom_t s_nonaddressable_eeprom;
 
@@ -52,6 +56,8 @@ static int s_fail_transmit_memaddr = -1;
 
 static mock_write_txn_t s_write_txns[MOCK_MAX_TXNS];
 static int s_write_txn_count = 0;
+static mock_write_txn_t s_read_txns[MOCK_MAX_TXNS];
+static int s_read_txn_count = 0;
 
 // Concurrency canary: counts overlapping entries into the bus functions.
 static _Atomic int s_in_use = 0;
@@ -68,6 +74,10 @@ static void canary_exit(void) {
 }
 
 static mock_eeprom_t *device_at(uint16_t addr) {
+    if (addr >= 0x58 && addr <= 0x5F) {
+        mock_eeprom_t *dev = &s_eeproms[addr - 0x58];
+        return dev->cs128 ? dev : NULL;
+    }
     if (addr < MOCK_EEPROM_BASE || addr >= MOCK_EEPROM_BASE + MOCK_EEPROM_COUNT) {
         return NULL;
     }
@@ -83,9 +93,8 @@ static mock_eeprom_t *device_at(uint16_t addr) {
 
 void mock_reset(void) {
     for (int i = 0; i < MOCK_EEPROM_COUNT; i++) {
-        s_eeproms[i].present = false;
-        memset(s_eeproms[i].mem, 0xFF, MOCK_EEPROM_SIZE);   // erased state
-        s_eeproms[i].busy_probes = 0;
+        memset(&s_eeproms[i], 0, sizeof(s_eeproms[i]));
+        memset(s_eeproms[i].mem, 0xFF, sizeof(s_eeproms[i].mem));
     }
     s_nonaddressable_eeprom.present = false;
     memset(s_nonaddressable_eeprom.mem, 0xFF, MOCK_EEPROM_SIZE);
@@ -93,6 +102,7 @@ void mock_reset(void) {
     s_fail_receive_memaddr = -1;
     s_fail_transmit_memaddr = -1;
     s_write_txn_count = 0;
+    s_read_txn_count = 0;
     atomic_store(&s_concurrency_violations, 0);
 }
 
@@ -105,6 +115,29 @@ void mock_set_present(uint8_t dev_addr, bool present) {
 
 void mock_set_nonaddressable_present(bool present) {
     s_nonaddressable_eeprom.present = present;
+}
+
+void mock_set_cs128_present(uint8_t dev_addr) {
+    mock_eeprom_t *dev = device_at(dev_addr);
+    dev->present = true;
+    dev->cs128 = true;
+    for (size_t i = 0; i < sizeof(dev->serial); i++) {
+        dev->serial[i] = (uint8_t)(0xA0 + i + dev_addr - MOCK_EEPROM_BASE);
+    }
+}
+
+void mock_set_cs128_config(uint8_t dev_addr, uint16_t config) {
+    mock_eeprom_t *dev = device_at(dev_addr);
+    dev->config[0] = (uint8_t)(config >> 8);
+    dev->config[1] = (uint8_t)config;
+}
+
+void mock_set_write_protected(uint8_t dev_addr, bool protected) {
+    device_at(dev_addr)->write_protected = protected;
+}
+
+uint8_t *mock_serial(uint8_t dev_addr) {
+    return device_at(dev_addr)->serial;
 }
 
 uint8_t *mock_mem(uint8_t dev_addr) {
@@ -135,6 +168,14 @@ int mock_concurrency_violations(void) {
     return atomic_load(&s_concurrency_violations);
 }
 
+int mock_read_txn_count(void) {
+    return s_read_txn_count;
+}
+
+const mock_write_txn_t *mock_read_txn(int i) {
+    return (i >= 0 && i < s_read_txn_count) ? &s_read_txns[i] : NULL;
+}
+
 // ============================================================================
 // I2C MASTER API
 // ============================================================================
@@ -155,7 +196,7 @@ esp_err_t i2c_master_bus_add_device(i2c_master_bus_handle_t bus,
         return ESP_ERR_INVALID_ARG;
     }
     if (config->device_address < MOCK_EEPROM_BASE ||
-        config->device_address >= MOCK_EEPROM_BASE + MOCK_EEPROM_COUNT) {
+        config->device_address >= MOCK_EEPROM_BASE + 2 * MOCK_EEPROM_COUNT) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -173,31 +214,39 @@ esp_err_t i2c_master_transmit(i2c_master_dev_handle_t dev,
 
     esp_err_t result = ESP_OK;
     mock_eeprom_t *eeprom = device_at(dev->addr);
+    size_t address_len = eeprom != NULL && eeprom->cs128 ? 2 : 1;
+    uint16_t mem_addr = data != NULL && len >= address_len ?
+        (address_len == 2 ? ((uint16_t)data[0] << 8) | data[1] : data[0]) : 0;
 
     if (eeprom == NULL || !eeprom->present) {
         result = ESP_ERR_NOT_FOUND;
-    } else if (len < 1) {
+    } else if (data == NULL || len < address_len || dev->addr >= 0x58) {
         result = ESP_ERR_INVALID_ARG;
     } else if (s_fail_transmit_memaddr >= 0 &&
-               data[0] == (uint8_t)s_fail_transmit_memaddr) {
+               mem_addr == s_fail_transmit_memaddr) {
         s_fail_transmit_memaddr = -1;
         result = ESP_FAIL;
     } else {
-        uint8_t mem_addr = data[0];
-        size_t data_len = len - 1;
+        size_t data_len = len - address_len;
 
         if (s_write_txn_count < MOCK_MAX_TXNS) {
             s_write_txns[s_write_txn_count].dev_addr = dev->addr;
             s_write_txns[s_write_txn_count].mem_addr = mem_addr;
             s_write_txns[s_write_txn_count].data_len = data_len;
+            s_write_txns[s_write_txn_count].address_len = address_len;
             s_write_txn_count++;
         }
 
-        // Page-buffer semantics: low 3 address bits increment and wrap, the
-        // page (high bits) is frozen for the whole transaction.
+        // Real page wraparound: 8-byte 24AA common denominator or 64-byte CS128.
+        size_t page_size = eeprom->cs128 ? 64 : 8;
+        size_t capacity = eeprom->cs128 ? MOCK_CS128_SIZE : MOCK_EEPROM_SIZE;
         for (size_t i = 0; i < data_len; i++) {
-            uint8_t dest = (uint8_t)((mem_addr & 0xF8) | ((mem_addr + i) & 0x07));
-            eeprom->mem[dest] = data[1 + i];
+            size_t dest = ((mem_addr / page_size) * page_size + (mem_addr + i) % page_size) % capacity;
+            bool swp = eeprom->cs128 && (eeprom->config[0] & 2) &&
+                       (eeprom->config[1] & (1U << (dest / 2048)));
+            if (!eeprom->write_protected && !swp) {
+                eeprom->mem[dest] = data[address_len + i];
+            }
         }
 
         if (data_len > 0) {
@@ -218,19 +267,38 @@ esp_err_t i2c_master_transmit_receive(i2c_master_dev_handle_t dev,
 
     esp_err_t result = ESP_OK;
     mock_eeprom_t *eeprom = device_at(dev->addr);
+    size_t address_len = eeprom != NULL && eeprom->cs128 ? 2 : 1;
+    uint16_t mem_addr = tx != NULL && tx_len == address_len ?
+        (address_len == 2 ? ((uint16_t)tx[0] << 8) | tx[1] : tx[0]) : 0;
 
     if (eeprom == NULL || !eeprom->present) {
         result = ESP_ERR_NOT_FOUND;
-    } else if (tx == NULL || tx_len != 1 || rx == NULL || rx_len == 0) {
+    } else if (tx == NULL || tx_len != address_len || rx == NULL || rx_len == 0) {
         result = ESP_ERR_INVALID_ARG;
     } else if (s_fail_receive_memaddr >= 0 &&
-               tx[0] == (uint8_t)s_fail_receive_memaddr) {
+               mem_addr == s_fail_receive_memaddr) {
         s_fail_receive_memaddr = -1;
         result = ESP_FAIL;
     } else {
-        // Sequential read: the address counter rolls over the whole array.
-        for (size_t i = 0; i < rx_len; i++) {
-            rx[i] = eeprom->mem[(tx[0] + i) % MOCK_EEPROM_SIZE];
+        if (s_read_txn_count < MOCK_MAX_TXNS) {
+            s_read_txns[s_read_txn_count++] = (mock_write_txn_t){
+                dev->addr, mem_addr, rx_len, tx_len
+            };
+        }
+        if (dev->addr >= 0x58) {
+            if (mem_addr == 0x0800 && rx_len == 16) {
+                memcpy(rx, eeprom->serial, rx_len);
+            } else if (mem_addr == 0x8800 && rx_len == 2) {
+                memcpy(rx, eeprom->config, rx_len);
+            } else {
+                result = ESP_ERR_INVALID_ARG;
+            }
+        } else {
+            // Sequential reads roll over the entire array, not the page.
+            size_t capacity = eeprom->cs128 ? MOCK_CS128_SIZE : MOCK_EEPROM_SIZE;
+            for (size_t i = 0; i < rx_len; i++) {
+                rx[i] = eeprom->mem[(mem_addr + i) % capacity];
+            }
         }
     }
 

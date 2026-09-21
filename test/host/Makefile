@@ -1,8 +1,8 @@
 # Host-side unit tests for esp_hardware_discovery.
 #
 # Builds src/esp_hardware_discovery.c against mock ESP-IDF headers and a
-# simulated 24AA02E64/24AA025E64 family (8-byte common-denominator writes,
-# write-cycle busy, address aliases, and fault injection).
+# simulated 24AA02E64/24AA025E64/24CS128 devices (page wraparound, factory
+# identities, protection, write-cycle busy, address aliases, fault injection).
 # No ESP-IDF installation required:
 #
 #   make            # build and run the tests
