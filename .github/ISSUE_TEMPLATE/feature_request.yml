@@ -1,0 +1,15 @@
+name: Feature or catalog request
+description: Suggest a feature, EEPROM profile, or component catalog entry.
+body:
+  - type: textarea
+    id: request
+    attributes:
+      label: Request and use case
+      description: Describe the board or application that would benefit.
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Technical details
+      description: For hardware, include the exact part, manufacturer reference, interface, and address options.

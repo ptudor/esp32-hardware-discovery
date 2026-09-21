@@ -645,9 +645,9 @@ esp_err_t eeprom_set_profile(uint8_t i2c_addr, eeprom_profile_t profile);
  * @brief Read the selected EEPROM's complete factory board identity
  *
  * Returns EUI64/8 bytes on 24AA, SERIAL128/16 bytes on 24CS128 or
- * ST_UID128/16 bytes on M24128-U. The 128-bit identities
- * uses security address 0x58 + the main address's A2/A1/A0 bits and word
- * address 0x0800. Use every returned byte; SERIAL128 is not an EUI or UUID.
+ * ST_UID128/16 bytes on M24128-U. Both 128-bit identities use an additional
+ * I2C address at main address + 8. The word address is 0x0800 on 24CS128
+ * and 0x0000 on M24128-U. Use every byte; SERIAL128 is not an EUI or UUID.
  * Independent of manifest contents; the RTC identity is not read or used.
  * On failure the output is cleared (kind NONE, length zero).
  */
@@ -667,7 +667,7 @@ bool eeprom_is_programmed(uint8_t i2c_addr);
 bool eeprom_read_capabilities(uint8_t i2c_addr, eeprom_capabilities_t *caps);
 
 // 8-byte EUI API: returns false without modifying the output on
-// 24CS128. Use eeprom_read_factory_id() to support either identity width.
+// 24CS128 or M24128-U. Use eeprom_read_factory_id() for all identity types.
 bool eeprom_read_unique_id(uint8_t i2c_addr, uint8_t *unique_id);
 
 /**
@@ -678,10 +678,10 @@ bool eeprom_read_unique_id(uint8_t i2c_addr, uint8_t *unique_id);
  *
  * Commit order: component descriptors and timestamp are written first, the
  * header page containing the magic byte is written last, and everything is
- * verified by read-back. An interrupted write therefore never leaves a
- * valid-looking magic byte in front of unwritten descriptors. Note that when
- * force-reprogramming an already-programmed EEPROM, the old header remains
- * valid until the final page is committed.
+ * verified by read-back. On blank EEPROMs, failure before the final header
+ * write leaves the magic byte unprogrammed. This is not an atomic update:
+ * when force-reprogramming, the old header remains valid until the final
+ * page is committed. Power loss during a page write can leave partial data.
  *
  * @param force Overwrite even if the EEPROM is already programmed. With
  *              force=false, a bus error or partial/dirty image during the
@@ -694,7 +694,7 @@ bool eeprom_write_capabilities(uint8_t i2c_addr,
 /**
  * @brief Scan the 0x50-0x57 manifest EEPROM address block
  *
- * Addressable 24AA025E64 and explicitly configured 24CS128 devices are
+ * Addressable 24AA025E64 and configured 24CS128 or M24128-U devices are
  * returned independently. Security addresses 0x58-0x5F are not scanned.
  * A 24AA02E64
  * ignores the three select bits and ACKs every address in the block, so the

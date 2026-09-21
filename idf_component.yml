@@ -1,8 +1,15 @@
-# idf_component.yml
 version: "1.0.0"
-description: Hardware discovery using 24AA02E64/24AA025E64/24CS128 EEPROMs and 4-byte IC descriptors
-url: https://www.ptudor.net/esp-idf/esp_hardware_discovery
-documentation: https://www.ptudor.net/esp-idf/esp_hardware_discovery/README.html
+description: ESP-IDF component for EEPROM-based board identification, hardware manifests, and component status tracking.
+license: MIT
+url: https://github.com/ptudor/esp32-hardware-discovery
+repository: https://github.com/ptudor/esp32-hardware-discovery.git
+documentation: https://github.com/ptudor/esp32-hardware-discovery#readme
+issues: https://github.com/ptudor/esp32-hardware-discovery/issues
+tags:
+  - esp32
+  - eeprom
+  - i2c
+  - hardware-discovery
 
 dependencies:
   idf:

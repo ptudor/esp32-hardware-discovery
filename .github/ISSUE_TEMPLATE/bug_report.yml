@@ -1,0 +1,28 @@
+name: Bug report
+description: Report an installation, discovery, identity, or provisioning problem.
+body:
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Component tag/commit, ESP-IDF version, ESP32 target, EEPROM part, selected profile, and I2C address.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Include a minimal code example and relevant wiring or address straps.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      render: text

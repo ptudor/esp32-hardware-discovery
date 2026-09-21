@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  host:
+    name: Host tests and examples
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: make -C test/host all syntax-examples
+
+  idf:
+    name: ESP-IDF ${{ matrix.idf }} / ${{ matrix.target }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        idf: ['v5.5.4']
+        target: [esp32, esp32s2, esp32s3, esp32c2, esp32c3, esp32c6, esp32h2]
+        include:
+          - idf: v5.2.6
+            target: esp32
+    container:
+      image: espressif/idf:${{ matrix.idf }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Build integration application
+        shell: bash
+        working-directory: test/idf
+        run: |
+          . "$IDF_PATH/export.sh"
+          idf.py set-target "${{ matrix.target }}"
+          idf.py build
