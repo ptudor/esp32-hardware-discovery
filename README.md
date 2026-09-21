@@ -21,9 +21,9 @@ drivers for the listed hardware.
 
 [v1.0.0](https://github.com/ptudor/esp32-hardware-discovery/releases/tag/v1.0.0)
 is the production source snapshot. It includes the current I2C API, four EEPROM
-variants, complete factory identities, and the sensor catalog. The older
-`20251231` release is retained as a historical snapshot; see the
-[migration notes](CHANGELOG.md#100---2026-09-21) when upgrading from it.
+variants, complete factory identities, and the sensor catalog. See the
+[migration notes](CHANGELOG.md#100---2026-09-21) when upgrading from the
+initial source snapshot.
 
 ## Features
 

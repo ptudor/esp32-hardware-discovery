@@ -1,8 +1,8 @@
 # Changelog
 
 Release history for ESP Hardware Discovery. The component version and Git tag
-use Semantic Versioning beginning with `v1.0.0`. The earlier date-based tag
-is retained as a historical snapshot.
+use Semantic Versioning beginning with `v1.0.0`. The initial snapshot is
+recorded below by its original commit.
 
 ## [1.0.0] - 2026-09-21
 
@@ -77,8 +77,8 @@ and all EEPROM and catalog additions since `20251231`.
 
 ## [20251231] - 2026-01-02
 
-Initial public source snapshot, published January 2, 2026, with the tag
-`20251231` and internal component metadata version `1.0.0`. It predates the
+Initial public source snapshot, published January 2, 2026, originally tagged
+`20251231` with internal component metadata version `1.0.0`. It predates the
 review fixes and is superseded by the production `v1.0.0` release above.
 
 ### Added
@@ -90,4 +90,4 @@ review fixes and is superseded by the production `v1.0.0` release above.
 - MIT license and initial documentation.
 
 [1.0.0]: https://github.com/ptudor/esp32-hardware-discovery/releases/tag/v1.0.0
-[20251231]: https://github.com/ptudor/esp32-hardware-discovery/releases/tag/20251231
+[20251231]: https://github.com/ptudor/esp32-hardware-discovery/commit/916fbdf4d6cd71059121d39e4c1b0baff18d1c62
