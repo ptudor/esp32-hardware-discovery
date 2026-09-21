@@ -280,6 +280,7 @@ typedef enum {
     IMU_BNO055      = 5,
     IMU_LSM9DS1     = 6,
     IMU_ICM45686    = 7,
+    IMU_LSM6DSRX    = 8,        // Six-axis IMU; I2C 0x6A/0x6B or SPI
 } eeprom_imu_id_t;
 
 // Crypto (CAT_CRYPTO = 4)
@@ -339,6 +340,13 @@ typedef enum {
     TEMP_DS18B20    = 3,
     TEMP_BME280     = 4,
     TEMP_SI7021     = 5,
+    TEMP_MCP9804    = 6,        // I2C 0x18-0x1F
+    TEMP_STS35      = 7,        // STS35-DIS; I2C 0x4A/0x4B
+    TEMP_STS31A     = 8,        // STS31A-DIS; I2C 0x4A/0x4B
+    TEMP_LM75A_NXP  = 9,        // NXP LM75AD: 11-bit; I2C 0x48-0x4F
+    TEMP_SHT21      = 10,       // Humidity + temperature; I2C 0x40 (not SHT21P)
+    TEMP_LM35       = 11,       // Analog output, 10 mV/degree C
+    TEMP_LM34       = 12,       // Analog output, 10 mV/degree F
 } eeprom_temp_id_t;
 
 // Pressure Sensors (CAT_PRESSURE = 10)
@@ -348,6 +356,7 @@ typedef enum {
     PRESSURE_MS5611     = 3,
     PRESSURE_BMP390     = 4,
     PRESSURE_MS5607     = 5,    // 10-1200 mbar extended range; not an MS5611
+    PRESSURE_BMP390L    = 6,    // Preserve exact part identity; I2C 0x76/0x77 or SPI
 } eeprom_pressure_id_t;
 
 // Generic Sensors (CAT_SENSOR = 11)
@@ -361,6 +370,12 @@ typedef enum {
     SENSOR_THERMOCOUPLE_MAX31855 = 7,
     SENSOR_HDC2080         = 8,
     SENSOR_MAG_MMC34160PJ  = 9, // Three-axis magnetometer
+    SENSOR_HDC2022         = 10, // Humidity + temperature; I2C 0x40/0x41
+    SENSOR_HIH8121         = 11, // Humidity + temperature; I2C
+    SENSOR_PROX_VCNL4200   = 12, // Proximity + ambient light; I2C 0x51
+    SENSOR_TOUCH_AT42QT1070 = 13, // Capacitive touch; I2C 0x1B in comms mode
+    SENSOR_LIGHT_NJL7502L  = 14, // Analog phototransistor
+    SENSOR_LIGHT_SFH3310   = 15, // Analog phototransistor
 } eeprom_sensor_id_t;
 
 // Audio (CAT_AUDIO = 12)
@@ -370,6 +385,7 @@ typedef enum {
     AUDIO_UDA1334       = 3,        // DAC
     AUDIO_PCM4222       = 4,        // 24-bit ADC
     AUDIO_MAX9814       = 5,        // Mic preamp with AGC
+    AUDIO_ICS43434      = 6,        // I2S digital MEMS microphone
 } eeprom_audio_id_t;
 
 // Power Management (CAT_POWER = 13)
@@ -380,6 +396,8 @@ typedef enum {
     POWER_LTC4150       = 4,        // Coulomb counter
     POWER_ADM7150       = 5,        // GPIO-gated low-noise LDO
     POWER_RT9193        = 6,        // GPIO-gated low-noise LDO
+    POWER_INA260        = 7,        // Current/voltage/power; I2C 0x40-0x4F
+    POWER_LTC2990       = 8,        // Voltage/current/temperature; I2C 0x4C-0x4F
 } eeprom_power_id_t;
 
 // LED Drivers (CAT_LED = 14)

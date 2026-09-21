@@ -45,6 +45,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- 18 sensor and monitoring catalog entries: LSM6DSRX, MCP9804, STS35, STS31A,
+  NXP LM75A, SHT21, LM35, LM34, BMP390L, HDC2022, HIH8121, VCNL4200,
+  AT42QT1070, NJL7502L, SFH 3310, ICS-43434, INA260 and LTC2990.
+  IDs are appended within existing categories; the EEPROM format is unchanged.
+- Sensor interface documentation with manufacturer references and an EEPROM
+  address-conflict note for VCNL4200.
 - `24CS128` support (`MEMORY_24CS128 = 7`) with explicit per-address
   `eeprom_set_profile()`, two-byte addressing, 64-byte page splitting,
   protection checks and a part-specific self-reference macro.

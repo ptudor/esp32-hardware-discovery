@@ -362,6 +362,15 @@ const char* eeprom_status_name(uint8_t status);
 
 Each category supports 255 unique IC IDs.
 
+### Sensor Catalog
+
+The [sensor catalog](SENSORS.md) lists additional temperature, humidity,
+motion, pressure, light, touch, power-monitoring and microphone descriptors,
+with interface addresses and manufacturer references. These are manifest
+identities: application firmware supplies the sensor drivers and wiring.
+Discovery reads the programmed EEPROM manifest; it does not probe or initialize
+the listed sensors.
+
 ## Best Practices
 
 1. **Always use the part-specific EEPROM self-reference** as component[0]

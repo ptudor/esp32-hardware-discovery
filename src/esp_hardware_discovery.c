@@ -1018,6 +1018,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case IMU_BNO055:    return "BNO055";
             case IMU_LSM9DS1:   return "LSM9DS1";
             case IMU_ICM45686:  return "ICM-45686";
+            case IMU_LSM6DSRX:  return "LSM6DSRX";
         }
     }
 
@@ -1083,6 +1084,13 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case TEMP_DS18B20: return "DS18B20";
             case TEMP_BME280:  return "BME280";
             case TEMP_SI7021:  return "Si7021";
+            case TEMP_MCP9804: return "MCP9804";
+            case TEMP_STS35:   return "STS35";
+            case TEMP_STS31A:  return "STS31A";
+            case TEMP_LM75A_NXP: return "LM75A (NXP)";
+            case TEMP_SHT21:   return "SHT21";
+            case TEMP_LM35:    return "LM35";
+            case TEMP_LM34:    return "LM34";
         }
     }
 
@@ -1093,6 +1101,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case PRESSURE_MS5611: return "MS5611";
             case PRESSURE_BMP390: return "BMP390";
             case PRESSURE_MS5607: return "MS5607";
+            case PRESSURE_BMP390L: return "BMP390L";
         }
     }
 
@@ -1107,6 +1116,12 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case SENSOR_THERMOCOUPLE_MAX31855: return "MAX31855";
             case SENSOR_HDC2080: return "HDC2080";
             case SENSOR_MAG_MMC34160PJ: return "MMC34160PJ";
+            case SENSOR_HDC2022: return "HDC2022";
+            case SENSOR_HIH8121: return "HIH8121";
+            case SENSOR_PROX_VCNL4200: return "VCNL4200";
+            case SENSOR_TOUCH_AT42QT1070: return "AT42QT1070";
+            case SENSOR_LIGHT_NJL7502L: return "NJL7502L";
+            case SENSOR_LIGHT_SFH3310: return "SFH 3310";
         }
     }
 
@@ -1117,6 +1132,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case AUDIO_UDA1334:  return "UDA1334";
             case AUDIO_PCM4222:  return "PCM4222";
             case AUDIO_MAX9814:  return "MAX9814";
+            case AUDIO_ICS43434: return "ICS-43434";
         }
     }
 
@@ -1128,6 +1144,8 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case POWER_LTC4150: return "LTC4150";
             case POWER_ADM7150: return "ADM7150";
             case POWER_RT9193:  return "RT9193";
+            case POWER_INA260:  return "INA260";
+            case POWER_LTC2990: return "LTC2990";
         }
     }
 

@@ -280,6 +280,76 @@ static void test_program_state_blank(void) {
           EEPROM_PROGRAM_STATE_BLANK);
 }
 
+static void test_sensor_manifest_round_trip(void) {
+    TEST_BEGIN("sensor catalog IDs persist as stable wire bytes and remain queryable");
+
+    const eeprom_ic_descriptor_t parts[] = {
+        IC_I2C(CAT_IMU, IMU_LSM6DSRX, 0x6A),
+        IC_I2C(CAT_TEMP, TEMP_MCP9804, 0x18),
+        IC_I2C(CAT_TEMP, TEMP_STS35, 0x4A),
+        IC_I2C(CAT_TEMP, TEMP_STS31A, 0x4B),
+        IC_I2C(CAT_TEMP, TEMP_LM75A_NXP, 0x48),
+        IC_I2C(CAT_TEMP, TEMP_SHT21, 0x40),
+        IC_INSTALLED(CAT_TEMP, TEMP_LM35),
+        IC_INSTALLED(CAT_TEMP, TEMP_LM34),
+        IC_I2C(CAT_PRESSURE, PRESSURE_BMP390L, 0x76),
+        IC_I2C(CAT_SENSOR, SENSOR_HDC2022, 0x41),
+        IC_I2C(CAT_SENSOR, SENSOR_HIH8121, 0x27),
+        IC_I2C(CAT_SENSOR, SENSOR_PROX_VCNL4200, 0x51),
+        IC_I2C(CAT_SENSOR, SENSOR_TOUCH_AT42QT1070, 0x1B),
+        IC_INSTALLED(CAT_SENSOR, SENSOR_LIGHT_NJL7502L),
+        IC_INSTALLED(CAT_SENSOR, SENSOR_LIGHT_SFH3310),
+        IC_INSTALLED(CAT_AUDIO, AUDIO_ICS43434),
+        IC_I2C(CAT_POWER, POWER_INA260, 0x44),
+        IC_I2C(CAT_POWER, POWER_LTC2990, 0x4C),
+    };
+    // Literal EEPROM bytes protect the category/ID ABI against renumbering.
+    const uint8_t wire[][4] = {
+        { 3, 8, 0x6A, 1 }, { 9, 6, 0x18, 1 }, { 9, 7, 0x4A, 1 },
+        { 9, 8, 0x4B, 1 }, { 9, 9, 0x48, 1 }, { 9, 10, 0x40, 1 },
+        { 9, 11, 0, 1 }, { 9, 12, 0, 1 }, { 10, 6, 0x76, 1 },
+        { 11, 10, 0x41, 1 }, { 11, 11, 0x27, 1 }, { 11, 12, 0x51, 1 },
+        { 11, 13, 0x1B, 1 }, { 11, 14, 0, 1 }, { 11, 15, 0, 1 },
+        { 12, 6, 0, 1 }, { 13, 7, 0x44, 1 }, { 13, 8, 0x4C, 1 },
+    };
+    const char *names[] = {
+        "LSM6DSRX", "MCP9804", "STS35", "STS31A", "LM75A (NXP)", "SHT21",
+        "LM35", "LM34", "BMP390L", "HDC2022", "HIH8121", "VCNL4200",
+        "AT42QT1070", "NJL7502L", "SFH 3310", "ICS-43434", "INA260", "LTC2990",
+    };
+    _Static_assert(sizeof(parts) == sizeof(wire), "Descriptors must remain four bytes");
+    _Static_assert(sizeof(names) / sizeof(names[0]) == sizeof(parts) / sizeof(parts[0]),
+                   "Every sensor must have an expected name");
+
+    mock_reset();
+    mock_set_present(EEPROM_I2C_ADDR_0, true);
+    eeprom_capabilities_t caps, readback;
+    make_test_board(&caps);
+    use_addressable_manifest_eeprom(&caps); // VCNL4200 occupies 0x51 on the board
+    caps.component_count = 1 + sizeof(parts) / sizeof(parts[0]);
+    memcpy(&caps.components[1], parts, sizeof(parts));
+    CHECK(eeprom_write_capabilities(EEPROM_I2C_ADDR_0, &caps, false));
+    CHECK(memcmp(mock_mem(EEPROM_I2C_ADDR_0) + CAP_OFFSET_COMPONENTS + 4,
+                 wire, sizeof(wire)) == 0);
+    CHECK(eeprom_read_capabilities(EEPROM_I2C_ADDR_0, &readback));
+    CHECK(eeprom_validate_self_reference(&readback));
+    CHECK(readback.component_count == caps.component_count);
+    for (size_t i = 0; i < sizeof(parts) / sizeof(parts[0]); i++) {
+        CHECK(memcmp(&readback.components[i + 1], wire[i], 4) == 0);
+        CHECK(strcmp(eeprom_ic_name(&readback.components[i + 1]), names[i]) == 0);
+        CHECK(eeprom_has_ic(&readback, parts[i].category, parts[i].id));
+    }
+    CHECK(eeprom_count_category(&readback, CAT_TEMP) == 7);
+    CHECK(eeprom_count_category(&readback, CAT_SENSOR) == 6);
+    CHECK(eeprom_count_category(&readback, CAT_POWER) == 2);
+    CHECK(eeprom_update_ic_status_at(EEPROM_I2C_ADDR_0, CAT_SENSOR,
+                                    SENSOR_PROX_VCNL4200, 0x51, IC_STATUS_FAILED));
+    CHECK(eeprom_read_capabilities(EEPROM_I2C_ADDR_0, &readback));
+    CHECK(!eeprom_has_ic(&readback, CAT_SENSOR, SENSOR_PROX_VCNL4200));
+    CHECK(eeprom_has_ic(&readback, CAT_SENSOR, SENSOR_HDC2022));
+    CHECK(eeprom_count_category(&readback, CAT_SENSOR) == 5);
+}
+
 static void test_navlistener_catalog_extensions(void) {
     TEST_BEGIN("navlistener catalog extensions have stable names");
 
@@ -834,6 +904,7 @@ int main(void) {
     test_r007_concurrency();
     test_r018_footer();
     test_navlistener_catalog_extensions();
+    test_sensor_manifest_round_trip();
     test_cs128_identity();
     test_cs128_manifest();
     test_cs128_guards();
