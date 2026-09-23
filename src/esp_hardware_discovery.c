@@ -3,7 +3,8 @@
  * @brief Hardware capability discovery with 4-byte IC descriptors
  * @version 1.0.0
  *
- * Implementation for 24AA02E64, 24AA025E64 and 24CS128 manifest EEPROMs
+ * Implementation for 24AA02E64, 24AA025E64, 24CS128, 24CS256, 24CS512 and
+ * M24128-U manifest EEPROMs
  */
 
 #include "esp_hardware_discovery.h"
@@ -24,7 +25,37 @@ static const char *TAG = "EEPROM_CAP";
 #define EEPROM_WRITE_CYCLE_TIMEOUT_MS   6   // Twc max is 5ms; +1ms margin
 #define EEPROM_ADDR_COUNT               8   // 24AA025E64 address-pin range
 #define EEPROM_SECURITY_ADDR_BASE      0x58
-#define EEPROM_CS128_CONFIG_START      0x8800
+#define EEPROM_24CS_CONFIG_START       0x8800  // Same register map on 24CS128/256/512
+#define EEPROM_24CS_PROTECTION_ZONES   8       // Equal enhanced-protection zones
+
+/**
+ * Wire geometry for each profile. The 24CS parts share one security and
+ * configuration register map and differ only in capacity, page size and
+ * therefore protection-zone size (capacity / 8).
+ */
+typedef struct {
+    const char *name;
+    size_t capacity;
+    size_t page_size;
+    uint8_t memory_id;      // Required components[0] ID; 0 accepts either 24AA
+    bool microchip_24cs;
+} eeprom_geometry_t;
+
+static const eeprom_geometry_t s_geometry[] = {
+    [EEPROM_PROFILE_24AAXXE64] = { "24AA02E64/24AA025E64", EEPROM_24AAXXE64_SIZE,
+                                   EEPROM_PAGE_SIZE, 0, false },
+    [EEPROM_PROFILE_24CS128] = { "24CS128", EEPROM_24CS128_SIZE,
+                                 EEPROM_24CS128_PAGE_SIZE, MEMORY_24CS128, true },
+    [EEPROM_PROFILE_M24128_U] = { "M24128-U", EEPROM_M24128_U_SIZE,
+                                  EEPROM_M24128_U_PAGE_SIZE, MEMORY_M24128_U, false },
+    [EEPROM_PROFILE_24CS256] = { "24CS256", EEPROM_24CS256_SIZE,
+                                 EEPROM_24CS256_PAGE_SIZE, MEMORY_24CS256, true },
+    [EEPROM_PROFILE_24CS512] = { "24CS512", EEPROM_24CS512_SIZE,
+                                 EEPROM_24CS512_PAGE_SIZE, MEMORY_24CS512, true },
+};
+
+#define EEPROM_PROFILE_COUNT    (sizeof(s_geometry) / sizeof(s_geometry[0]))
+#define EEPROM_MAX_PAGE_SIZE    EEPROM_24CS512_PAGE_SIZE
 
 // ============================================================================
 // MODULE STATE (set up by eeprom_discovery_init)
@@ -76,9 +107,13 @@ static bool eeprom_valid_address(uint8_t i2c_addr) {
     return i2c_addr >= EEPROM_I2C_ADDR_0 && i2c_addr <= EEPROM_I2C_ADDR_7;
 }
 
-static bool eeprom_is_cs128(uint8_t i2c_addr) {
-    return eeprom_valid_address(i2c_addr) &&
-           s_profiles[i2c_addr - EEPROM_I2C_ADDR_BASE] == EEPROM_PROFILE_24CS128;
+static const eeprom_geometry_t *eeprom_geometry(uint8_t addr) {
+    return &s_geometry[eeprom_valid_address(addr) ?
+                       s_profiles[addr - EEPROM_I2C_ADDR_BASE] : EEPROM_PROFILE_24AAXXE64];
+}
+
+static bool eeprom_is_24cs(uint8_t addr) {
+    return eeprom_geometry(addr)->microchip_24cs;
 }
 
 static bool eeprom_is_st(uint8_t addr) {
@@ -86,22 +121,33 @@ static bool eeprom_is_st(uint8_t addr) {
            s_profiles[addr - EEPROM_I2C_ADDR_BASE] == EEPROM_PROFILE_M24128_U;
 }
 
+// Two-byte word addresses and a factory identity outside the main array.
 static bool eeprom_is_large(uint8_t addr) {
-    return eeprom_is_cs128(addr) || eeprom_is_st(addr);
+    return eeprom_geometry(addr)->memory_id != 0;
+}
+
+// True for a self-reference ID that is valid only under its explicit profile.
+static bool eeprom_memory_id_requires_profile(uint8_t memory_id) {
+    if (memory_id == 0) {
+        return false;
+    }
+    for (size_t i = 0; i < EEPROM_PROFILE_COUNT; i++) {
+        if (s_geometry[i].memory_id == memory_id) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static bool eeprom_profile_matches(uint8_t addr, const eeprom_capabilities_t *caps) {
-    bool cs = caps->component_count && caps->components[0].category == CAT_MEMORY &&
-              caps->components[0].id == MEMORY_24CS128;
-    bool st = caps->component_count && caps->components[0].category == CAT_MEMORY &&
-              caps->components[0].id == MEMORY_M24128_U;
-    return cs == eeprom_is_cs128(addr) && st == eeprom_is_st(addr);
+    uint8_t self_id = caps->component_count && caps->components[0].category == CAT_MEMORY ?
+                      caps->components[0].id : 0;
+    uint8_t required = eeprom_geometry(addr)->memory_id;
+    return required ? self_id == required : !eeprom_memory_id_requires_profile(self_id);
 }
 
 esp_err_t eeprom_set_profile(uint8_t i2c_addr, eeprom_profile_t profile) {
-    if (!eeprom_valid_address(i2c_addr) ||
-        (profile != EEPROM_PROFILE_24AAXXE64 && profile != EEPROM_PROFILE_24CS128 &&
-         profile != EEPROM_PROFILE_M24128_U)) {
+    if (!eeprom_valid_address(i2c_addr) || (unsigned)profile >= EEPROM_PROFILE_COUNT) {
         ESP_LOGE(TAG, "Invalid EEPROM address/profile selection");
         return ESP_ERR_INVALID_ARG;
     }
@@ -182,18 +228,20 @@ static esp_err_t eeprom_read_security(uint8_t i2c_addr, uint16_t word_addr,
 
 // Inspect enhanced protection; never change configuration or lock registers.
 // In hardware protection mode WP must be low on the board; verify writes too.
-static esp_err_t eeprom_cs128_check_write(uint8_t i2c_addr, uint16_t mem_addr, size_t len) {
+static esp_err_t eeprom_24cs_check_write(uint8_t i2c_addr, uint16_t mem_addr, size_t len) {
+    const eeprom_geometry_t *geometry = eeprom_geometry(i2c_addr);
     uint8_t config[2];
-    esp_err_t ret = eeprom_read_security(i2c_addr, EEPROM_CS128_CONFIG_START,
+    esp_err_t ret = eeprom_read_security(i2c_addr, EEPROM_24CS_CONFIG_START,
                                                config, sizeof(config));
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Cannot read 24CS128 write protection at 0x%02X", i2c_addr);
+        ESP_LOGE(TAG, "Cannot read %s write protection at 0x%02X", geometry->name, i2c_addr);
         return ret;
     }
     if (config[0] & 0x02) { // EWPM, bit 9 of the 16-bit register
-        for (size_t zone = mem_addr / 2048; zone <= (mem_addr + len - 1) / 2048; zone++) {
+        size_t zone_size = geometry->capacity / EEPROM_24CS_PROTECTION_ZONES;
+        for (size_t zone = mem_addr / zone_size; zone <= (mem_addr + len - 1) / zone_size; zone++) {
             if (config[1] & (1U << zone)) {
-                ESP_LOGE(TAG, "24CS128 zone %u is write-protected", (unsigned)zone);
+                ESP_LOGE(TAG, "%s zone %u is write-protected", geometry->name, (unsigned)zone);
                 return ESP_ERR_INVALID_STATE;
             }
         }
@@ -201,15 +249,16 @@ static esp_err_t eeprom_cs128_check_write(uint8_t i2c_addr, uint16_t mem_addr, s
     return ESP_OK;
 }
 
-/** Write within 8-byte 24AA or 64-byte CS128 pages, ACK-polling each chunk. */
+/** Write within 8-byte 24AA or the selected part's pages, ACK-polling each chunk. */
 static esp_err_t eeprom_write_bytes(uint8_t i2c_addr, uint16_t mem_addr,
                                      const uint8_t *data, size_t len) {
     if (data == NULL || len == 0 || !eeprom_valid_address(i2c_addr)) {
         return ESP_ERR_INVALID_ARG;
     }
 
+    const eeprom_geometry_t *geometry = eeprom_geometry(i2c_addr);
     bool large = eeprom_is_large(i2c_addr);
-    size_t capacity = large ? EEPROM_24CS128_SIZE : EEPROM_24AAXXE64_SIZE;
+    size_t capacity = geometry->capacity;
     if (mem_addr >= capacity || len > capacity - mem_addr) {
         ESP_LOGE(TAG, "Write out of bounds: addr %u + len %zu > %zu",
                  mem_addr, len, capacity);
@@ -222,8 +271,8 @@ static esp_err_t eeprom_write_bytes(uint8_t i2c_addr, uint16_t mem_addr,
         return ESP_ERR_INVALID_ARG;
     }
 
-    if (eeprom_is_cs128(i2c_addr)) {
-        esp_err_t ret = eeprom_cs128_check_write(i2c_addr, mem_addr, len);
+    if (eeprom_is_24cs(i2c_addr)) {
+        esp_err_t ret = eeprom_24cs_check_write(i2c_addr, mem_addr, len);
         if (ret != ESP_OK) {
             return ret;
         }
@@ -235,7 +284,7 @@ static esp_err_t eeprom_write_bytes(uint8_t i2c_addr, uint16_t mem_addr,
     }
 
     size_t written = 0;
-    size_t page_size = large ? EEPROM_24CS128_PAGE_SIZE : EEPROM_PAGE_SIZE;
+    size_t page_size = geometry->page_size;
     size_t address_size = large ? 2 : 1;
 
     while (written < len) {
@@ -246,7 +295,7 @@ static esp_err_t eeprom_write_bytes(uint8_t i2c_addr, uint16_t mem_addr,
             chunk = page_remaining;
         }
 
-        uint8_t buf[2 + EEPROM_24CS128_PAGE_SIZE];
+        uint8_t buf[2 + EEPROM_MAX_PAGE_SIZE];
         buf[0] = large ? (uint8_t)(addr >> 8) : (uint8_t)addr;
         if (large) {
             buf[1] = (uint8_t)addr;
@@ -283,7 +332,7 @@ static esp_err_t eeprom_read_bytes(uint8_t i2c_addr, uint16_t mem_addr,
     }
 
     bool large = eeprom_is_large(i2c_addr);
-    size_t capacity = large ? EEPROM_24CS128_SIZE : EEPROM_24AAXXE64_SIZE;
+    size_t capacity = eeprom_geometry(i2c_addr)->capacity;
     if (mem_addr >= capacity || len > capacity - mem_addr) {
         ESP_LOGE(TAG, "Read out of bounds: addr %u + len %zu > %zu",
                  mem_addr, len, capacity);
@@ -312,7 +361,7 @@ static bool eeprom_probe(uint8_t i2c_addr) {
  * @brief Read the magic byte and classify the device state
  *
  * "Blank" means every byte in the existing 248-byte manifest region has
- * the same erased/unprogrammed fill (extra CS128 capacity is left alone).
+ * the same erased/unprogrammed fill (extra capacity on larger parts is left alone).
  * If the magic says blank (0xFF or 0x00) but any other byte in that region
  * differs, a write was interrupted or an old image was only partly erased;
  * provisioning must require explicit recovery rather than overwrite it.
@@ -1184,6 +1233,8 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case MEMORY_24AA025E64: return "24AA025E64";
             case MEMORY_24CS128:   return "24CS128";
             case MEMORY_M24128_U: return "M24128-U";
+            case MEMORY_24CS256:   return "24CS256";
+            case MEMORY_24CS512:   return "24CS512";
         }
     }
 
@@ -1294,8 +1345,8 @@ bool eeprom_validate_self_reference(const eeprom_capabilities_t *caps) {
         return false;
     }
 
-    if (first->id != MEMORY_24AA02E64 &&
-        first->id != MEMORY_24AA025E64 && first->id != MEMORY_24CS128 && first->id != MEMORY_M24128_U) {
+    if (first->id != MEMORY_24AA02E64 && first->id != MEMORY_24AA025E64 &&
+        !eeprom_memory_id_requires_profile(first->id)) {
         ESP_LOGW(TAG, "Component[0] is not a supported manifest EEPROM (found: %s)",
                  eeprom_ic_name(first));
         return false;
@@ -1348,7 +1399,7 @@ void eeprom_print_capabilities(const eeprom_capabilities_t *caps) {
     }
 
     if (caps->component_count > 0 && caps->components[0].category == CAT_MEMORY &&
-        (caps->components[0].id == MEMORY_24CS128 || caps->components[0].id == MEMORY_M24128_U)) {
+        eeprom_memory_id_requires_profile(caps->components[0].id)) {
         ESP_LOGI(TAG, "Board ID: 128-bit serial via eeprom_read_factory_id()");
     } else {
         ESP_LOGI(TAG, "64-bit EUI: %02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X",

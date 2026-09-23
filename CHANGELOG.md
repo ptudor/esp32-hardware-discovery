@@ -4,6 +4,19 @@ Release history for ESP Hardware Discovery. The component version and Git tag
 use Semantic Versioning beginning with `v1.0.0`. The initial snapshot is
 recorded below by its original commit.
 
+## [Unreleased]
+
+### Added
+
+- Microchip 24CS256 and 24CS512 EEPROM profiles (`EEPROM_PROFILE_24CS256`,
+  `EEPROM_PROFILE_24CS512`), memory catalog IDs `MEMORY_24CS256` (9) and
+  `MEMORY_24CS512` (10), and the `IC_EEPROM_SELF_24CS256()` and
+  `IC_EEPROM_SELF_24CS512()` self-reference macros. Both share the 24CS128
+  serial and configuration registers; the driver applies their 32/64 KiB
+  capacity, 64/128-byte pages and 4/8 KiB enhanced-protection zones.
+- Host tests for both geometries: serials at every strap, manifests, page
+  splitting above 16 KiB, bounds, zone protection and a mixed-part scan.
+
 ## [1.0.0] - 2026-09-21
 
 First production source release, incorporating the reviewed implementation
@@ -70,5 +83,6 @@ review fixes and is superseded by the production `v1.0.0` release above.
 - GNSS, Shepherd, and MIDI project identifiers and reference examples.
 - MIT license and initial documentation.
 
+[Unreleased]: https://github.com/ptudor/esp32-hardware-discovery/compare/v1.0.0...HEAD
 [1.0.0]: https://github.com/ptudor/esp32-hardware-discovery/releases/tag/v1.0.0
 [20251231]: https://github.com/ptudor/esp32-hardware-discovery/commit/916fbdf4d6cd71059121d39e4c1b0baff18d1c62

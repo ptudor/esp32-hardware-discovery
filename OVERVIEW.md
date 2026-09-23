@@ -6,8 +6,8 @@ lives in [README.md](README.md); development guidance lives in
 
 ## What It Does
 
-Every PCB carries a Microchip 24AA02E64, 24AA025E64, 24CS128 or ST M24128-U EEPROM
-programmed once at manufacturing with a description of what is installed on
+Every PCB carries a Microchip 24AA02E64, 24AA025E64, 24CS128, 24CS256, 24CS512
+or ST M24128-U EEPROM programmed once at manufacturing with a description of what is installed on
 the board. Firmware reads it at boot and adapts to reality — PCB revisions,
 substitute parts, unpopulated footprints, and field failures — without
 compile-time configuration.
@@ -32,9 +32,10 @@ Footer (16 bytes)
   248–255  24AA only: factory-programmed 8-byte EUI (read-only silicon)
 ```
 
-On 24CS128 the same manifest occupies bytes 0–247. Its factory serial is
-16 bytes at security word address `0x0800`, read through the additional
-interface at main I2C address + 8. Main-array bytes 248–16383 are untouched.
+On 24CS128, 24CS256 and 24CS512 the same manifest occupies bytes 0–247.
+Their factory serial is 16 bytes at security word address `0x0800`, read
+through the additional interface at main I2C address + 8. Main-array bytes
+from 248 to the end of the 16, 32 or 64 KiB array are untouched.
 M24128-U uses the same manifest region and preserves the rest of its 16 KiB
 array. Its 16-byte UID is at identification-page word `0x0000`, also at main
 I2C address + 8; the driver validates its `20 e0 0e ff` header.
@@ -63,16 +64,18 @@ The implementation is layered:
 1. **Module state** — `eeprom_discovery_init()` stores the `i2c_master` bus
    handle, creates the mutex, and lazily adds one device handle per EEPROM
    address (0x50–0x57, plus identity interfaces at 0x58–0x5F).
-   `eeprom_set_profile()` selects CS128 or M24128-U before bus operations;
-   the default is the shared 24AA protocol. Everything below refuses to run
+   `eeprom_set_profile()` selects a 24CS part or M24128-U before bus
+   operations; the default is the shared 24AA protocol. A per-profile
+   geometry table supplies capacity, page size and required self-reference. Everything below refuses to run
    before init.
 2. **Low-level I/O** (static, callers hold the lock) — `eeprom_write_bytes()`
    chunks writes at the 8-byte common denominator (24AA02E64 pages are 8 bytes;
-   24AA025E64 pages are 16), or 64-byte pages with two-byte addressing on
-   CS128 and M24128-U. It ACK-polls each chunk until the write cycle (Twc ≤ 5 ms)
-   completes. Reads are sequential and unchunked. Bounds use each part's
-   capacity; 24AA writes reject the EUI region. CS128 writes first inspect
-   software protection. Its security/configuration interfaces are read-only
+   24AA025E64 pages are 16), or the part's 64- or 128-byte pages with
+   two-byte addressing on the 24CS parts and M24128-U. It ACK-polls each
+   chunk until the write cycle (Twc ≤ 5 ms) completes. Reads are sequential
+   and unchunked. Bounds use each part's capacity; 24AA writes reject the EUI
+   region. 24CS writes first inspect software protection across eight zones
+   of capacity / 8. Their security/configuration interfaces are read-only
    in this driver; no lock commands are issued. M24128-U uses WC hardware
    protection and receives no identification-page writes.
 3. **Unlocked internals** — read/write/update logic shared by the public API.
@@ -91,12 +94,13 @@ The implementation is layered:
 
 - `components[0]` is **always** the EEPROM itself, using the part-specific
   `IC_EEPROM_SELF_24AA02E64(addr)`, `IC_EEPROM_SELF_24AA025E64(addr)`,
-  `IC_EEPROM_SELF_24CS128(addr)` or `IC_EEPROM_SELF_M24128_U(addr)` macro.
+  `IC_EEPROM_SELF_24CS128(addr)`, `IC_EEPROM_SELF_24CS256(addr)`,
+  `IC_EEPROM_SELF_24CS512(addr)` or `IC_EEPROM_SELF_M24128_U(addr)` macro.
   `eeprom_validate_self_reference()` checks category, supported part ID,
   address, and status; `eeprom_scan_bus()` warns when a device in the EEPROM
   address range lacks it (likely a foreign part).
 - The 24AA02E64 aliases all of `0x50`-`0x57`; scans record it once and stop.
-  The other three parts respond at their strapped main-array addresses.
+  The other parts respond at their strapped main-array addresses.
   Scans do not enumerate identity interfaces as additional boards.
 - Iterate components from index 1; index 0 is the EEPROM.
 - A failed guard read is never "blank": `eeprom_write_capabilities(force=false)`
@@ -111,8 +115,8 @@ The implementation is layered:
 
 `cd test/host && make` builds the implementation against mock ESP-IDF headers
 and simulated addressable/non-addressable EEPROM profiles that faithfully
-model page-buffer wraparound, address aliasing, two-byte CS128 addressing,
-security serials, protection, write-cycle busy NACKs, fault injection, and
+model page-buffer wraparound, address aliasing, two-byte 24CS and M24128-U
+addressing across 16, 32 and 64 KiB arrays, security serials, zone protection, write-cycle busy NACKs, fault injection, and
 bus-concurrency violations — no ESP-IDF or hardware required.
 `make syntax-examples` checks the examples file. The integration application
 at `test/idf` builds and links the public API against real ESP-IDF headers.

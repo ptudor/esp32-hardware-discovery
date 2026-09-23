@@ -4,7 +4,8 @@
 
 ESP Hardware Discovery is an ESP-IDF component for runtime hardware capability
 discovery. It uses 4-byte IC descriptors stored in a Microchip 24AA02E64,
-24AA025E64, 24CS128 or ST M24128-U EEPROM to describe what's installed on a PCB.
+24AA025E64, 24CS128, 24CS256, 24CS512 or ST M24128-U EEPROM to describe
+what's installed on a PCB.
 
 **The soul**: Program once at manufacturing. Discover at runtime. Know exactly what hardware you're talking to without compile-time configuration.
 
@@ -56,11 +57,11 @@ interfaces.
 ESP32, ESP32-S2, ESP32-S3, ESP32-C2, ESP32-C3, ESP32-C6, ESP32-H2
 
 **Hardware:**
-- Microchip 24AA02E64, 24AA025E64, 24CS128 or ST M24128-U EEPROM
+- Microchip 24AA02E64, 24AA025E64, 24CS128, 24CS256, 24CS512 or ST M24128-U EEPROM
 - I2C bus at 100kHz or 400kHz
 - Address block: 0x50-0x57; 24AA02E64 aliases all eight addresses, while
   24AA025E64 responds only at its A0/A1/A2-selected address
-- Select an explicit profile before accessing 24CS128 or M24128-U. Their
+- Select an explicit profile before accessing a 24CS part or M24128-U. Their
   128-bit factory identities use an additional interface at main address + 8.
 
 **Build commands:**

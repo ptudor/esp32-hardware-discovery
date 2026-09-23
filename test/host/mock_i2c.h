@@ -1,4 +1,4 @@
-/* Control API for the simulated 24AA02E64/24AA025E64/24CS128 devices */
+/* Control API for the simulated 24AA, 24CS128/256/512 and M24128-U devices */
 #ifndef MOCK_I2C_H
 #define MOCK_I2C_H
 
@@ -10,6 +10,8 @@
 #define MOCK_EEPROM_BASE    0x50
 #define MOCK_EEPROM_COUNT   8
 #define MOCK_CS128_SIZE     16384
+#define MOCK_CS256_SIZE     32768
+#define MOCK_CS512_SIZE     65536
 
 typedef struct {
     uint8_t dev_addr;   // I2C device address
@@ -25,6 +27,8 @@ void mock_reset(void);
 void mock_set_present(uint8_t dev_addr, bool present);
 void mock_set_st_present(uint8_t dev_addr);
 void mock_set_cs128_present(uint8_t dev_addr);
+// A Microchip 24CS part: CS128 (16384/64), CS256 (32768/64) or CS512 (65536/128).
+void mock_set_cs_present(uint8_t dev_addr, size_t capacity, size_t page_size);
 void mock_set_cs128_config(uint8_t dev_addr, uint16_t config);
 void mock_set_write_protected(uint8_t dev_addr, bool protected);
 uint8_t *mock_serial(uint8_t dev_addr);
@@ -32,7 +36,7 @@ uint8_t *mock_serial(uint8_t dev_addr);
 // Make one non-addressable 24AA02E64 respond at every address 0x50-0x57.
 void mock_set_nonaddressable_present(bool present);
 
-// Direct access to a device's memory image (256 bytes on 24AA, 16384 on CS128).
+// Direct access to a device's memory image (256 bytes on 24AA, else its capacity).
 uint8_t *mock_mem(uint8_t dev_addr);
 
 // Fail the next receive/transmit whose target memory address matches, once.

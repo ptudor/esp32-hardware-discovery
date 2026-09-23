@@ -9,7 +9,8 @@ and component status tracking. Program a board's component list during
 manufacturing, then read it at boot so firmware can adapt to PCB revisions,
 substituted parts, and unpopulated footprints.
 
-Supports Microchip 24AA02E64, 24AA025E64, 24CS128 and ST M24128-U EEPROMs.
+Supports Microchip 24AA02E64, 24AA025E64, 24CS128, 24CS256 and 24CS512, and
+ST M24128-U EEPROMs.
 Discovery reads the programmed manifest; application firmware supplies the
 drivers for the listed hardware.
 
@@ -29,8 +30,8 @@ four EEPROM variants, complete factory identities, and the sensor catalog.
 - **Runtime hardware discovery**: Know exactly what's on your PCB
 - **Field-updateable status**: Mark failed components without full reprogram
 - **56 IC capacity**: 224 bytes for component data
-- **Factory board identity**: 64-bit EUI on 24AA, 128-bit serial on 24CS128, or 128-bit ST UID
-- **EEPROM selection**: Explicit profiles for 24AA, 24CS128, and M24128-U protocols
+- **Factory board identity**: 64-bit EUI on 24AA, 128-bit serial on 24CS128/256/512, or 128-bit ST UID
+- **EEPROM selection**: Explicit profiles for 24AA, 24CS128/256/512, and M24128-U protocols
 - **Multiple projects**: Support different PCB variants
 - **Thread-safe**: All bus operations serialized by an internal mutex
 
@@ -102,8 +103,8 @@ ESP_ERROR_CHECK(eeprom_discovery_init(bus));
 touches the bus. The EEPROM device is clocked at 100 kHz by default;
 define `EEPROM_DISCOVERY_I2C_SPEED_HZ` at compile time to override.
 GPIO 21/22 are examples for the original ESP32; choose available pins for your
-board and provide suitable external I2C pull-ups. If fitting a 24CS128 or
-M24128-U, select its [profile](#5-select-the-eeprom-profile-and-read-the-board-identity)
+board and provide suitable external I2C pull-ups. If fitting a 24CS128, 24CS256,
+24CS512 or M24128-U, select its [profile](#5-select-the-eeprom-profile-and-read-the-board-identity)
 immediately after initialization, before manufacturing or discovery calls.
 
 ### 3. Manufacturing - Program Board
@@ -172,25 +173,29 @@ if (eeprom_read_factory_id(0x50, &board_id)) {
 }
 ```
 
-For an ST M24128-U assembly, use `EEPROM_PROFILE_M24128_U` and
+For a 24CS256 or 24CS512, use `EEPROM_PROFILE_24CS256` with
+`IC_EEPROM_SELF_24CS256(0x50)` or `EEPROM_PROFILE_24CS512` with
+`IC_EEPROM_SELF_24CS512(0x50)`; the identity and manifest behave as on the
+24CS128. For an ST M24128-U assembly, use `EEPROM_PROFILE_M24128_U` and
 `IC_EEPROM_SELF_M24128_U(0x50)` instead. Its identity kind is
-`EEPROM_FACTORY_ID_ST_UID128`, with all 16 UID bytes preserved. The 24CS128
-kind is `EEPROM_FACTORY_ID_SERIAL128`; 24AA parts use `EEPROM_FACTORY_ID_EUI64`.
+`EEPROM_FACTORY_ID_ST_UID128`, with all 16 UID bytes preserved. The 24CS
+parts' kind is `EEPROM_FACTORY_ID_SERIAL128`; 24AA parts use `EEPROM_FACTORY_ID_EUI64`.
 
 For MAX, the full CS128 serial is the board identity. The RTC's EUI is a
 separate component identifier. Do not truncate the serial to 64 bits or
 treat it as an IEEE EUI or a UUID. `eeprom_read_unique_id()` remains an
-8-byte EUI API and returns false on CS128 or M24128-U; the existing
-`eeprom_capabilities_t.unique_id[8]` is zero for both. The typed API
+8-byte EUI API and returns false on the 24CS parts or M24128-U; the existing
+`eeprom_capabilities_t.unique_id[8]` is zero for all of them. The typed API
 preserves the existing capabilities struct and provides an explicit failure
 result: `kind = NONE`, `length = 0`, and cleared bytes.
 
 Only the EEPROM transport changes. The manifest still has 56 descriptors,
-the same offsets and timestamp, and an 8-byte reserved footer. CS128 bytes
-`248–16383` and its security memory are untouched by manifest provisioning.
-Blank checks examine only the established `0–247` region. The driver checks
-software write protection, ACK-polls writes, and verifies provisioning and
-CS128 status updates by read-back. It never writes configuration or issues
+the same offsets and timestamp, and an 8-byte reserved footer. On the 24CS
+parts, main-array bytes from `248` to the end of the array and the security
+memory are untouched by manifest provisioning. Blank checks examine only the
+established `0–247` region. The driver checks software write protection using
+each part's zone size, ACK-polls writes, and verifies provisioning and
+two-byte-address status updates by read-back. It never writes configuration or issues
 permanent lock commands. Keep WP low when using hardware write protection.
 
 ## Usage Across Multiple Projects
@@ -269,7 +274,7 @@ Footer (16 bytes):
   Bytes 248-255: 24AA only: 8-byte factory EUI (read-only)
 ```
 
-On 24CS128 and M24128-U, the manifest occupies bytes 0–247 and the remaining
+On 24CS128/256/512 and M24128-U, the manifest occupies bytes 0–247 and the remaining
 main array is untouched. Their 16-byte factory identities are read through
 a separate interface using `eeprom_read_factory_id()`.
 
@@ -297,8 +302,8 @@ The manifest has three separate design fields, each one byte:
 
 Two boards built from the same design and revision share those fields and
 their component list. Their factory EEPROM identities distinguish the
-individual units: 64-bit EUI on 24AA, full 128-bit serial on CS128, or 128-bit
-UID on M24128-U. Replacing
+individual units: 64-bit EUI on 24AA, full 128-bit serial on the 24CS parts,
+or 128-bit UID on M24128-U. Replacing
 the identity EEPROM changes that physical unit's reported identity.
 
 For repeated chips on one board, use separate descriptors with their actual
@@ -317,6 +322,10 @@ caps.components[0] = IC_EEPROM_SELF_24AA02E64(EEPROM_I2C_ADDR_0);
 caps.components[0] = IC_EEPROM_SELF_24AA025E64(EEPROM_I2C_ADDR_0);
 // or, after selecting EEPROM_PROFILE_24CS128:
 caps.components[0] = IC_EEPROM_SELF_24CS128(EEPROM_I2C_ADDR_0);
+// or, after selecting EEPROM_PROFILE_24CS256:
+caps.components[0] = IC_EEPROM_SELF_24CS256(EEPROM_I2C_ADDR_0);
+// or, after selecting EEPROM_PROFILE_24CS512:
+caps.components[0] = IC_EEPROM_SELF_24CS512(EEPROM_I2C_ADDR_0);
 // or, after selecting EEPROM_PROFILE_M24128_U:
 caps.components[0] = IC_EEPROM_SELF_M24128_U(EEPROM_I2C_ADDR_0);
 ```
@@ -387,10 +396,10 @@ is invalid. Only `BLANK` is permission to initialize. `eeprom_is_programmed()`
 is the backward-compatible convenience check and returns false for all states
 except `PROGRAMMED`.
 
-The scanner reports independently addressed 24AA025E64 and configured 24CS128
-or M24128-U devices normally; it does not scan their identity interfaces. A
-24AA02E64 aliases the complete `0x50`-`0x57` block, so it is returned once and
-the scan stops.
+The scanner reports independently addressed 24AA025E64 and configured
+24CS128/256/512 or M24128-U devices normally; it does not scan their
+identity interfaces. A 24AA02E64 aliases the complete `0x50`-`0x57` block,
+so it is returned once and the scan stops.
 
 ### Query Functions
 ```c
@@ -451,16 +460,16 @@ the listed sensors.
 
 ### EEPROM
 
-| Property | 24AA02E64 | 24AA025E64 | 24CS128 | M24128-U |
-|---|---|---|---|---|
-| Main address | Aliases `0x50–0x57` | A0/A1/A2 select `0x50–0x57` | A0/A1/A2 select `0x50–0x57` | E0/E1/E2 select `0x50–0x57` |
-| Array capacity | 256 bytes | 256 bytes | 16,384 bytes | 16,384 bytes |
-| Word address | 1 byte | 1 byte | 2 bytes, MSB first | 2 bytes, MSB first |
-| Page size | 8 bytes | 16 bytes | 64 bytes | 64 bytes |
-| Factory identity | 64-bit EUI at `0xF8` | 64-bit EUI at `0xF8` | 128-bit serial at security word `0x0800` | 128-bit UID at identification word `0x0000` |
-| Extra interface | None | None | Security/configuration at main address + 8 | Identification page at main address + 8 |
-| SOIC pin 7 | NC | NC | WP; low permits hardware write access | WC; low permits writes |
-| Self-reference | `IC_EEPROM_SELF_24AA02E64(addr)` | `IC_EEPROM_SELF_24AA025E64(addr)` | `IC_EEPROM_SELF_24CS128(addr)` | `IC_EEPROM_SELF_M24128_U(addr)` |
+| Property | 24AA02E64 | 24AA025E64 | 24CS128 | 24CS256 / 24CS512 | M24128-U |
+|---|---|---|---|---|---|
+| Main address | Aliases `0x50–0x57` | A0/A1/A2 select `0x50–0x57` | A0/A1/A2 select `0x50–0x57` | A0/A1/A2 select `0x50–0x57` | E0/E1/E2 select `0x50–0x57` |
+| Array capacity | 256 bytes | 256 bytes | 16,384 bytes | 32,768 / 65,536 bytes | 16,384 bytes |
+| Word address | 1 byte | 1 byte | 2 bytes, MSB first | 2 bytes, MSB first | 2 bytes, MSB first |
+| Page size | 8 bytes | 16 bytes | 64 bytes | 64 / 128 bytes | 64 bytes |
+| Factory identity | 64-bit EUI at `0xF8` | 64-bit EUI at `0xF8` | 128-bit serial at security word `0x0800` | 128-bit serial at security word `0x0800` | 128-bit UID at identification word `0x0000` |
+| Extra interface | None | None | Security/configuration at main address + 8 | Security/configuration at main address + 8 | Identification page at main address + 8 |
+| SOIC pin 7 | NC | NC | WP; low permits hardware write access | WP; low permits hardware write access | WC; low permits writes |
+| Self-reference | `IC_EEPROM_SELF_24AA02E64(addr)` | `IC_EEPROM_SELF_24AA025E64(addr)` | `IC_EEPROM_SELF_24CS128(addr)` | `IC_EEPROM_SELF_24CS256(addr)` / `IC_EEPROM_SELF_24CS512(addr)` | `IC_EEPROM_SELF_M24128_U(addr)` |
 
 Both 24AA parts use the same 256-byte array: bytes `0x00`-`0xF7` are writable and
 the factory EUI-64 occupies read-only bytes `0xF8`-`0xFF`. The component
@@ -471,7 +480,7 @@ cycles. See the [Microchip family datasheet](https://www.microchip.com/content/d
 
 Do not use a 24AA02E64 on a bus containing any other device in
 `0x50`-`0x57`. In particular, it conflicts with the MCP79412's fixed EEPROM/EUI
-address at `0x57`; a 24AA025E64 or 24CS128 at `0x50` can coexist with it.
+address at `0x57`; a 24AA025E64 or 24CS-family part at `0x50` can coexist with it.
 
 The SOIC-8 24CS128T-I/SN is suitable for the MAX swap at 3.3 V with pin 7
 grounded, but requires the CS128 firmware profile. At A0/A1/A2 = 0 its
@@ -480,6 +489,30 @@ The driver retains 100 kHz by default and does not enter high-speed mode.
 See [Microchip DS20006913B](https://ww1.microchip.com/downloads/aemDocuments/documents/MPD/ProductDocuments/DataSheets/24CS128-128-Kbit-3.4-MHz-I2C-Serial-EEPROM-DS20006913.pdf),
 sections 2, 6, 9 and 10.2. Bench validation remains necessary for serial
 stability, writes/read-back, power-cycle retention and shared-bus operation.
+
+### Microchip 24CS256 and 24CS512
+
+Select `EEPROM_PROFILE_24CS256` or `EEPROM_PROFILE_24CS512` and use
+`IC_EEPROM_SELF_24CS256(address)` or `IC_EEPROM_SELF_24CS512(address)`
+(memory catalog IDs 9 and 10). Both use the 24CS128 security and
+configuration register map: the 128-bit serial is at security word `0x0800`
+and configuration at `0x8800`, both at main address + 8. They differ in
+capacity (32,768 and 65,536 bytes), write page (64 and 128 bytes) and
+enhanced-protection zones, which are one eighth of the array (4 KiB and
+8 KiB, against 2 KiB on the 24CS128). The driver sizes its protection check
+for the selected part. The 24CS512's 16-bit word address uses every bit.
+The manifest region, blank check, read-back verification and read-only
+treatment of configuration and lock registers are unchanged. The SOIC-8
+pinout (A0, A1, A2, VSS, SDA, SCL, WP, VCC) matches the 24CS128.
+
+The 1-Mbit 24CSM01 is not supported: it carries address bit A16 in the
+device address byte in place of A0 and uses 256-byte pages.
+
+Sources: [Microchip DS20005998D](https://ww1.microchip.com/downloads/aemDocuments/documents/MPD/ProductDocuments/DataSheets/24CS256-256-Kbit-3.4-MHz-I2C-Serial-EEPROM-with-128-Bit-Serial-Number-and-Enhanced-Software-Write-Protection-DS20005998.pdf)
+(24CS256) and [DS20005769H](https://ww1.microchip.com/downloads/aemDocuments/documents/MPD/ProductDocuments/DataSheets/24CS512-512-Kbit-3.4-MHz-I2C-Serial-EEPROM-with-128-Bit-Serial-Number-and-Enhanced-Software-Write-Protection-DS20005769.pdf)
+(24CS512), sections 3.1, 3.3.2, 6.6.2, 9.2 and 10.2. Host tests simulate
+both geometries, page wrap, zone protection and mixed-part scans. Physical
+qualification on an assembled board remains required before production use.
 
 ### ST M24128-U
 

@@ -1,13 +1,14 @@
 /**
- * Simulated 24AA02E64/24AA025E64/24CS128 behind the ESP-IDF i2c_master API,
+ * Simulated 24AA02E64/24AA025E64, 24CS128/256/512 and M24128-U behind the
+ * ESP-IDF i2c_master API,
  * plus the FreeRTOS primitives the module under test needs. Addressable mock
  * devices respond at one selected address; the non-addressable mock models a
  * single 24AA02E64 aliasing across the complete 0x50-0x57 block.
  *
- * The write path models 8-byte 24AA and 64-byte CS128 page buffers: a write
- * transaction that carries more bytes than fit in the addressed page wraps
- * around WITHIN the page (the address pointer's low 3 or 6 bits increment, the
- * high bits stay frozen), exactly like the real silicon. Code that does not
+ * The write path models 8-byte 24AA and 64- or 128-byte two-byte-address page
+ * buffers: a write transaction that carries more bytes than fit in the
+ * addressed page wraps around WITHIN the page (the address pointer's low 3, 6
+ * or 7 bits increment, the high bits stay frozen), exactly like the real silicon. Code that does not
  * chunk its writes correctly therefore corrupts the simulated image the same
  * way it would corrupt a real board.
  *
@@ -38,10 +39,12 @@ struct mock_i2c_dev { uint8_t addr; };
 
 typedef struct {
     bool present;
-    bool cs128;
+    bool cs;            // Microchip 24CS128/256/512 register map
     bool st;
     bool write_protected;
-    uint8_t mem[MOCK_CS128_SIZE];
+    size_t capacity;
+    size_t page_size;
+    uint8_t mem[MOCK_CS512_SIZE];
     uint8_t serial[16];
     uint8_t config[2];
     int busy_probes;    // probes to NACK before the write cycle "completes"
@@ -77,7 +80,7 @@ static void canary_exit(void) {
 static mock_eeprom_t *device_at(uint16_t addr) {
     if (addr >= 0x58 && addr <= 0x5F) {
         mock_eeprom_t *dev = &s_eeproms[addr - 0x58];
-        return (dev->cs128 || dev->st) ? dev : NULL;
+        return (dev->cs || dev->st) ? dev : NULL;
     }
     if (addr < MOCK_EEPROM_BASE || addr >= MOCK_EEPROM_BASE + MOCK_EEPROM_COUNT) {
         return NULL;
@@ -96,8 +99,12 @@ void mock_reset(void) {
     for (int i = 0; i < MOCK_EEPROM_COUNT; i++) {
         memset(&s_eeproms[i], 0, sizeof(s_eeproms[i]));
         memset(s_eeproms[i].mem, 0xFF, sizeof(s_eeproms[i].mem));
+        s_eeproms[i].capacity = MOCK_EEPROM_SIZE;
+        s_eeproms[i].page_size = 8;
     }
     s_nonaddressable_eeprom.present = false;
+    s_nonaddressable_eeprom.capacity = MOCK_EEPROM_SIZE;
+    s_nonaddressable_eeprom.page_size = 8;
     memset(s_nonaddressable_eeprom.mem, 0xFF, MOCK_EEPROM_SIZE);
     s_nonaddressable_eeprom.busy_probes = 0;
     s_fail_receive_memaddr = -1;
@@ -118,18 +125,24 @@ void mock_set_nonaddressable_present(bool present) {
     s_nonaddressable_eeprom.present = present;
 }
 
-void mock_set_cs128_present(uint8_t dev_addr) {
+void mock_set_cs_present(uint8_t dev_addr, size_t capacity, size_t page_size) {
     mock_eeprom_t *dev = device_at(dev_addr);
     dev->present = true;
-    dev->cs128 = true;
+    dev->cs = true;
+    dev->capacity = capacity;
+    dev->page_size = page_size;
     for (size_t i = 0; i < sizeof(dev->serial); i++) {
         dev->serial[i] = (uint8_t)(0xA0 + i + dev_addr - MOCK_EEPROM_BASE);
     }
 }
 
+void mock_set_cs128_present(uint8_t dev_addr) {
+    mock_set_cs_present(dev_addr, MOCK_CS128_SIZE, 64);
+}
+
 void mock_set_st_present(uint8_t addr) {
     mock_set_cs128_present(addr);
-    device_at(addr)->cs128 = false;
+    device_at(addr)->cs = false;
     device_at(addr)->st = true;
     memcpy(device_at(addr)->serial, "\x20\xe0\x0e\xff", 4);
 }
@@ -222,7 +235,7 @@ esp_err_t i2c_master_transmit(i2c_master_dev_handle_t dev,
 
     esp_err_t result = ESP_OK;
     mock_eeprom_t *eeprom = device_at(dev->addr);
-    size_t address_len = eeprom != NULL && (eeprom->cs128 || eeprom->st) ? 2 : 1;
+    size_t address_len = eeprom != NULL && (eeprom->cs || eeprom->st) ? 2 : 1;
     uint16_t mem_addr = data != NULL && len >= address_len ?
         (address_len == 2 ? ((uint16_t)data[0] << 8) | data[1] : data[0]) : 0;
 
@@ -247,13 +260,14 @@ esp_err_t i2c_master_transmit(i2c_master_dev_handle_t dev,
             s_write_txn_count++;
         }
 
-        // Real page wraparound: 8-byte 24AA common denominator or 64-byte CS128.
-        size_t page_size = (eeprom->cs128 || eeprom->st) ? 64 : 8;
-        size_t capacity = (eeprom->cs128 || eeprom->st) ? MOCK_CS128_SIZE : MOCK_EEPROM_SIZE;
+        // Real page wraparound within the part's 8-, 64- or 128-byte page.
+        size_t page_size = eeprom->page_size;
+        size_t capacity = eeprom->capacity;
         for (size_t i = 0; i < data_len; i++) {
             size_t dest = ((mem_addr / page_size) * page_size + (mem_addr + i) % page_size) % capacity;
-            bool swp = eeprom->cs128 && (eeprom->config[0] & 2) &&
-                       (eeprom->config[1] & (1U << (dest / 2048)));
+            // Enhanced protection: eight equal zones, SWPn in configuration byte 1.
+            bool swp = eeprom->cs && (eeprom->config[0] & 2) &&
+                       (eeprom->config[1] & (1U << (dest / (capacity / 8))));
             if (!eeprom->write_protected && !swp) {
                 eeprom->mem[dest] = data[address_len + i];
             }
@@ -277,7 +291,7 @@ esp_err_t i2c_master_transmit_receive(i2c_master_dev_handle_t dev,
 
     esp_err_t result = ESP_OK;
     mock_eeprom_t *eeprom = device_at(dev->addr);
-    size_t address_len = eeprom != NULL && (eeprom->cs128 || eeprom->st) ? 2 : 1;
+    size_t address_len = eeprom != NULL && (eeprom->cs || eeprom->st) ? 2 : 1;
     uint16_t mem_addr = tx != NULL && tx_len == address_len ?
         (address_len == 2 ? ((uint16_t)tx[0] << 8) | tx[1] : tx[0]) : 0;
 
@@ -296,19 +310,18 @@ esp_err_t i2c_master_transmit_receive(i2c_master_dev_handle_t dev,
             };
         }
         if (dev->addr >= 0x58) {
-            if (((eeprom->cs128 && mem_addr == 0x0800) ||
+            if (((eeprom->cs && mem_addr == 0x0800) ||
                  (eeprom->st && (mem_addr & 0x3f) == 0)) && rx_len == 16) {
                 memcpy(rx, eeprom->serial, rx_len);
-            } else if (eeprom->cs128 && mem_addr == 0x8800 && rx_len == 2) {
+            } else if (eeprom->cs && mem_addr == 0x8800 && rx_len == 2) {
                 memcpy(rx, eeprom->config, rx_len);
             } else {
                 result = ESP_ERR_INVALID_ARG;
             }
         } else {
             // Sequential reads roll over the entire array, not the page.
-            size_t capacity = (eeprom->cs128 || eeprom->st) ? MOCK_CS128_SIZE : MOCK_EEPROM_SIZE;
             for (size_t i = 0; i < rx_len; i++) {
-                rx[i] = eeprom->mem[(mem_addr + i) % capacity];
+                rx[i] = eeprom->mem[(mem_addr + i) % eeprom->capacity];
             }
         }
     }

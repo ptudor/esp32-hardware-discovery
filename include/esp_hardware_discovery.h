@@ -39,7 +39,12 @@ extern "C" {
 #define EEPROM_24CS128_SIZE          16384
 #define EEPROM_24CS128_PAGE_SIZE        64
 #define EEPROM_24CS128_SERIAL_SIZE      16
-#define EEPROM_24CS128_SERIAL_START 0x0800
+#define EEPROM_24CS128_SERIAL_START 0x0800  // Same security word on 24CS256/24CS512
+
+#define EEPROM_24CS256_SIZE          32768
+#define EEPROM_24CS256_PAGE_SIZE        64
+#define EEPROM_24CS512_SIZE          65536
+#define EEPROM_24CS512_PAGE_SIZE       128
 
 #define EEPROM_M24128_U_SIZE       16384
 #define EEPROM_M24128_U_PAGE_SIZE      64
@@ -51,6 +56,8 @@ typedef enum {
     EEPROM_PROFILE_24AAXXE64 = 0,
     EEPROM_PROFILE_24CS128 = 1,
     EEPROM_PROFILE_M24128_U = 2,
+    EEPROM_PROFILE_24CS256 = 3,
+    EEPROM_PROFILE_24CS512 = 4,
 } eeprom_profile_t;
 
 typedef enum {
@@ -91,7 +98,7 @@ typedef struct {
 #endif
 
 // ============================================================================
-// MANIFEST LAYOUT (first 256 bytes; unchanged on 24CS128 and M24128-U)
+// MANIFEST LAYOUT (first 256 bytes; unchanged on 24CS128/256/512 and M24128-U)
 // ============================================================================
 
 // HEADER (16 bytes):
@@ -110,8 +117,8 @@ typedef struct {
 // FOOTER (16 bytes):
 // Bytes 240-247: Reserved (random from QA testing - future: crypto seed, batch code, etc.)
 // Bytes 248-255: 8-byte unique ID (factory programmed, read-only)
-// On 24CS128 and M24128-U, bytes 248-255 are unused by this format. Its factory serial is
-// separate from the main array; use eeprom_read_factory_id().
+// On 24CS128/256/512 and M24128-U, bytes 248-255 are unused by this format. Their factory
+// identity is separate from the main array; use eeprom_read_factory_id().
 
 #define CAP_OFFSET_MAGIC        0
 #define CAP_OFFSET_PROJECT      1
@@ -433,6 +440,8 @@ typedef enum {
     MEMORY_24AA025E64   = 6,        // Addressable EUI-64 manifest EEPROM
     MEMORY_24CS128      = 7,        // 16 KiB EEPROM with separate 128-bit serial
     MEMORY_M24128_U     = 8,        // ST 16 KiB EEPROM with read-only 128-bit UID
+    MEMORY_24CS256      = 9,        // 32 KiB EEPROM with separate 128-bit serial
+    MEMORY_24CS512      = 10,       // 64 KiB EEPROM with separate 128-bit serial
 } eeprom_memory_id_t;
 
 // MCU (CAT_MCU = 17)
@@ -537,8 +546,8 @@ typedef struct {
                                  // (persisted at bytes 8-15, little-endian)
     eeprom_ic_descriptor_t components[CAP_MAX_COMPONENTS];
 
-    // 24AA 64-bit EUI only; zero on 24CS128 and M24128-U. For board identity on either
-    // profile use eeprom_read_factory_id(), preserving its kind and length.
+    // 24AA 64-bit EUI only; zero on 24CS128/256/512 and M24128-U. For board identity on
+    // any profile use eeprom_read_factory_id(), preserving its kind and length.
     uint8_t unique_id[8];
 
     // Reserved footer (random from QA testing; populated from bytes 240-247 on read)
@@ -595,6 +604,12 @@ typedef struct {
 #define IC_EEPROM_SELF_24CS128(addr) \
     IC_EEPROM_SELF_TYPE(MEMORY_24CS128, addr)
 
+#define IC_EEPROM_SELF_24CS256(addr) \
+    IC_EEPROM_SELF_TYPE(MEMORY_24CS256, addr)
+
+#define IC_EEPROM_SELF_24CS512(addr) \
+    IC_EEPROM_SELF_TYPE(MEMORY_24CS512, addr)
+
 #define IC_EEPROM_SELF(addr) \
     IC_EEPROM_SELF_24AA02E64(addr)
 
@@ -632,7 +647,8 @@ esp_err_t eeprom_discovery_init(i2c_master_bus_handle_t bus_handle);
 /**
  * @brief Select the wire protocol at one main-array address (0x50-0x57)
  *
- * Call after init and before scanning, reading or provisioning a 24CS128 or M24128-U.
+ * Call after init and before scanning, reading or provisioning a 24CS128, 24CS256,
+ * 24CS512 or M24128-U.
  * Other addresses retain the default 24AA profile. No I2C traffic is sent;
  * an ACK or a manifest cannot safely select the word-address width.
  * Selection persists until changed. Configure before starting worker tasks.
@@ -644,10 +660,10 @@ esp_err_t eeprom_set_profile(uint8_t i2c_addr, eeprom_profile_t profile);
 /**
  * @brief Read the selected EEPROM's complete factory board identity
  *
- * Returns EUI64/8 bytes on 24AA, SERIAL128/16 bytes on 24CS128 or
+ * Returns EUI64/8 bytes on 24AA, SERIAL128/16 bytes on 24CS128/256/512 or
  * ST_UID128/16 bytes on M24128-U. Both 128-bit identities use an additional
- * I2C address at main address + 8. The word address is 0x0800 on 24CS128
- * and 0x0000 on M24128-U. Use every byte; SERIAL128 is not an EUI or UUID.
+ * I2C address at main address + 8. The word address is 0x0800 on the 24CS
+ * parts and 0x0000 on M24128-U. Use every byte; SERIAL128 is not an EUI or UUID.
  * Independent of manifest contents; the RTC identity is not read or used.
  * On failure the output is cleared (kind NONE, length zero).
  */
@@ -667,7 +683,7 @@ bool eeprom_is_programmed(uint8_t i2c_addr);
 bool eeprom_read_capabilities(uint8_t i2c_addr, eeprom_capabilities_t *caps);
 
 // 8-byte EUI API: returns false without modifying the output on
-// 24CS128 or M24128-U. Use eeprom_read_factory_id() for all identity types.
+// 24CS128/256/512 or M24128-U. Use eeprom_read_factory_id() for all identity types.
 bool eeprom_read_unique_id(uint8_t i2c_addr, uint8_t *unique_id);
 
 /**
@@ -694,8 +710,8 @@ bool eeprom_write_capabilities(uint8_t i2c_addr,
 /**
  * @brief Scan the 0x50-0x57 manifest EEPROM address block
  *
- * Addressable 24AA025E64 and configured 24CS128 or M24128-U devices are
- * returned independently. Security addresses 0x58-0x5F are not scanned.
+ * Addressable 24AA025E64 and configured 24CS128/256/512 or M24128-U devices
+ * are returned independently. Security addresses 0x58-0x5F are not scanned.
  * A 24AA02E64
  * ignores the three select bits and ACKs every address in the block, so the
  * scan records that physical device once and stops.

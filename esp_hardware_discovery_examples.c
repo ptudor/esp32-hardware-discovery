@@ -1,6 +1,6 @@
 /**
  * @file esp_hardware_discovery_examples.c
- * @brief Usage examples for 24AA02E64/24AA025E64/24CS128 capability discovery
+ * @brief Usage examples for 24AA and 24CS-family capability discovery
  *
  * Reference only - this file is not compiled as part of the component.
  * Copy the pieces you need into your application (it defines app_main,
