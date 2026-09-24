@@ -16,6 +16,8 @@ recorded below by its original commit.
   capacity, 64/128-byte pages and 4/8 KiB enhanced-protection zones.
 - Host tests for both geometries: serials at every strap, manifests, page
   splitting above 16 KiB, bounds, zone protection and a mixed-part scan.
+- Power catalog ID `POWER_TPS7A20` (9) for TI's TPS7A20 GPIO-gated
+  low-noise LDOs, alongside `POWER_ADM7150` and `POWER_RT9193`.
 
 ## [1.0.0] - 2026-09-21
 

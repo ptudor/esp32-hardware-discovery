@@ -405,6 +405,7 @@ typedef enum {
     POWER_RT9193        = 6,        // GPIO-gated low-noise LDO
     POWER_INA260        = 7,        // Current/voltage/power; I2C 0x40-0x4F
     POWER_LTC2990       = 8,        // Voltage/current/temperature; I2C 0x4C-0x4F
+    POWER_TPS7A20       = 9,        // GPIO-gated low-noise LDO
 } eeprom_power_id_t;
 
 // LED Drivers (CAT_LED = 14)

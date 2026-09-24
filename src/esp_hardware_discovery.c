@@ -1195,6 +1195,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case POWER_RT9193:  return "RT9193";
             case POWER_INA260:  return "INA260";
             case POWER_LTC2990: return "LTC2990";
+            case POWER_TPS7A20: return "TPS7A20";
         }
     }
 
