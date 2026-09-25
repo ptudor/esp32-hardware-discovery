@@ -1097,6 +1097,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case COMM_SX1262:    return "SX1262";
             case COMM_RFM95W:    return "RFM95W";
             case COMM_ESP32:     return "ESP32";
+            case COMM_W5500:     return "W5500";
         }
     }
 
@@ -1171,6 +1172,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case SENSOR_TOUCH_AT42QT1070: return "AT42QT1070";
             case SENSOR_LIGHT_NJL7502L: return "NJL7502L";
             case SENSOR_LIGHT_SFH3310: return "SFH 3310";
+            case SENSOR_THERMOCOUPLE_MAX31856: return "MAX31856";
         }
     }
 

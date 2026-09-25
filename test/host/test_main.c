@@ -366,6 +366,9 @@ static void test_navlistener_catalog_extensions(void) {
                    "battery catalog values are written into EEPROMs");
     _Static_assert(POWER_ADM7150 == 5 && POWER_RT9193 == 6 && POWER_TPS7A20 == 9,
                    "power catalog values are written into EEPROMs");
+    _Static_assert(COMM_W5500 == 6, "communication catalog value is written into EEPROMs");
+    _Static_assert(SENSOR_THERMOCOUPLE_MAX31855 == 7 && SENSOR_THERMOCOUPLE_MAX31856 == 16,
+                   "thermocouple catalog values are written into EEPROMs");
 
     eeprom_ic_descriptor_t parts[] = {
         IC_INSTALLED(CAT_GPS, GPS_NEO_M10),
@@ -388,12 +391,15 @@ static void test_navlistener_catalog_extensions(void) {
         IC_I2C(CAT_PRESSURE, PRESSURE_MS5607, 0x77),
         IC_INSTALLED(CAT_BATTERY, BATTERY_CR2032),
         IC_INSTALLED(CAT_BATTERY, BATTERY_CR1220),
+        IC_INSTALLED(CAT_COMM, COMM_W5500),
+        IC_INSTALLED(CAT_SENSOR, SENSOR_THERMOCOUPLE_MAX31856),
     };
     const char *names[] = {
         "NEO-M10", "NEO-F10N", "NEO-F10T", "ZED-F9T", "BMP390",
         "HDC2080", "ADM7150", "RT9193", "TPS7A20", "CR123A",
         "MAX-M10S", "MAX-M10N", "MAX-F10S", "ZED-X20P", "MAX31328",
         "ICM-45686", "MMC34160PJ", "MS5607", "CR2032", "CR1220",
+        "W5500", "MAX31856",
     };
 
     for (size_t i = 0; i < sizeof(parts) / sizeof(parts[0]); i++) {

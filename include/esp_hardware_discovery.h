@@ -314,6 +314,7 @@ typedef enum {
     COMM_SX1262         = 3,        // LoRa
     COMM_RFM95W         = 4,        // LoRa 915MHz
     COMM_ESP32          = 5,        // WiFi/BLE
+    COMM_W5500          = 6,        // SPI hardwired TCP/IP Ethernet controller
 } eeprom_comm_id_t;
 
 // USB/Serial (CAT_USB_SERIAL = 7)
@@ -383,6 +384,7 @@ typedef enum {
     SENSOR_TOUCH_AT42QT1070 = 13, // Capacitive touch; I2C 0x1B in comms mode
     SENSOR_LIGHT_NJL7502L  = 14, // Analog phototransistor
     SENSOR_LIGHT_SFH3310   = 15, // Analog phototransistor
+    SENSOR_THERMOCOUPLE_MAX31856 = 16, // SPI thermocouple converter; any type, not a MAX31855
 } eeprom_sensor_id_t;
 
 // Audio (CAT_AUDIO = 12)

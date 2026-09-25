@@ -18,6 +18,9 @@ recorded below by its original commit.
   splitting above 16 KiB, bounds, zone protection and a mixed-part scan.
 - Power catalog ID `POWER_TPS7A20` (9) for TI's TPS7A20 GPIO-gated
   low-noise LDOs, alongside `POWER_ADM7150` and `POWER_RT9193`.
+- Communication catalog ID `COMM_W5500` (6) for WIZnet's W5500 SPI Ethernet
+  controller, and sensor catalog ID `SENSOR_THERMOCOUPLE_MAX31856` (16) for
+  the MAX31856 SPI thermocouple converter, which is not a MAX31855.
 
 ## [1.0.0] - 2026-09-21
 

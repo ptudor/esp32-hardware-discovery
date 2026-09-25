@@ -27,6 +27,7 @@ the address actually configured on the board. For SPI or I2S, use
 | [INA260][ina260] | `CAT_POWER` | `POWER_INA260 = 7` | I2C `0x40`–`0x4F`; current, voltage and power |
 | [LTC2990][ltc2990] | `CAT_POWER` | `POWER_LTC2990 = 8` | I2C `0x4C`–`0x4F`; voltage, current and temperature |
 | [ICS-43434][ics43434] | `CAT_AUDIO` | `AUDIO_ICS43434 = 6` | I2S microphone; descriptor address `0` |
+| [MAX31856][max31856] | `CAT_SENSOR` | `SENSOR_THERMOCOUPLE_MAX31856 = 16` | SPI thermocouple converter; descriptor address `0` |
 
 SHT21 stays beside SHT35 in `CAT_TEMP`; HDC2022 stays beside HDC2080 in
 `CAT_SENSOR`. These categories identify component families, not every quantity
@@ -37,6 +38,8 @@ temperature result, while the [TI LM75A][lm75a-ti] has a 9-bit result. SHT21
 uses I2C; the similarly named SHT21P uses PWM. BMP390L has its own ID to
 preserve its exact identity instead of relabeling existing `PRESSURE_BMP390`
 descriptors. A distinct ID does not imply driver incompatibility.
+MAX31856 is not a MAX31855: it has a different register map, configurable
+thermocouple types and fault detection, so it has its own ID.
 
 ### Address planning
 
@@ -101,6 +104,7 @@ must still validate responses and initialize each installed device.
 [ina260]: https://www.ti.com/lit/ds/symlink/ina260.pdf
 [ltc2990]: https://www.analog.com/media/en/technical-documentation/data-sheets/LTC2990.pdf
 [ics43434]: https://invensense.tdk.com/wp-content/uploads/2016/02/DS-000069-ICS-43434-v1.2.pdf
+[max31856]: https://www.analog.com/media/en/technical-documentation/data-sheets/max31856.pdf
 [lm35]: https://www.ti.com/lit/ds/symlink/lm35.pdf
 [lm34]: https://www.ti.com/lit/ds/symlink/lm34.pdf
 [njl7502l]: https://www.nisshinbo-microdevices.co.jp/en/products/ambient-light-sensor/spec/?product=njl7502l
