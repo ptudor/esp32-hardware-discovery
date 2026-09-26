@@ -366,6 +366,8 @@ typedef enum {
     PRESSURE_BMP390     = 4,
     PRESSURE_MS5607     = 5,    // 10-1200 mbar extended range; not an MS5611
     PRESSURE_BMP390L    = 6,    // Preserve exact part identity; I2C 0x76/0x77 or SPI
+    PRESSURE_BMP580     = 7,    // Bosch BMP5 register map; I2C 0x46/0x47, I3C or SPI
+    PRESSURE_BMP581     = 8,    // BMP580's register map and CHIP_ID; own ID for exact identity
 } eeprom_pressure_id_t;
 
 // Generic Sensors (CAT_SENSOR = 11)

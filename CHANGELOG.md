@@ -38,6 +38,16 @@ recorded below by its original commit.
   factory CA fixture write identical bytes. Host tests fix each released list
   byte for byte.
 - Host mock of the 24CS Manufacturer ID read, including a stuck bus.
+- Pressure catalog IDs `PRESSURE_BMP580` (7) and `PRESSURE_BMP581` (8) for
+  Bosch's BMP5 barometers. They share a register map and CHIP_ID, so the
+  manifest carries which part is fitted.
+
+### Changed
+
+- The `INTSAT_X20` revision 1 list names a BMP581 at `0x46` in place of the
+  BMP388 at `0x76`, and adds an INA3221 rail monitor at `0x41`
+  (`POWER_INA3221`), following the board's BOM before any X20 board was built
+  or programmed.
 
 ## [1.0.0] - 2026-09-21
 

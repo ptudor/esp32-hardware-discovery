@@ -361,11 +361,12 @@ static void test_navlistener_catalog_extensions(void) {
                    "GPS catalog values are written into EEPROMs; append, never renumber");
     _Static_assert(RTC_MAX31328 == 7, "RTC catalog value is written into EEPROMs");
     _Static_assert(IMU_ICM45686 == 7, "IMU catalog value is written into EEPROMs");
-    _Static_assert(PRESSURE_MS5607 == 5, "pressure catalog value is written into EEPROMs");
+    _Static_assert(PRESSURE_MS5607 == 5 && PRESSURE_BMP580 == 7 && PRESSURE_BMP581 == 8,
+                   "pressure catalog values are written into EEPROMs");
     _Static_assert(SENSOR_MAG_MMC34160PJ == 9, "sensor catalog value is written into EEPROMs");
     _Static_assert(BATTERY_CR2032 == 8 && BATTERY_CR1220 == 9,
                    "battery catalog values are written into EEPROMs");
-    _Static_assert(POWER_ADM7150 == 5 && POWER_RT9193 == 6 && POWER_TPS7A20 == 9,
+    _Static_assert(POWER_INA3221 == 2 && POWER_ADM7150 == 5 && POWER_RT9193 == 6 && POWER_TPS7A20 == 9,
                    "power catalog values are written into EEPROMs");
     _Static_assert(COMM_W5500 == 6, "communication catalog value is written into EEPROMs");
     _Static_assert(SENSOR_THERMOCOUPLE_MAX31855 == 7 && SENSOR_THERMOCOUPLE_MAX31856 == 16,
@@ -400,6 +401,9 @@ static void test_navlistener_catalog_extensions(void) {
         IC_BOARD(CAT_INTSAT, INTSAT_X20, 1),
         IC_BOARD(CAT_INTSAT, INTSAT_MAX, 1),
         IC_BOARD(CAT_INTSAT, INTSAT_CARRIER_ARDUSIMPLE, 1),
+        IC_I2C(CAT_PRESSURE, PRESSURE_BMP580, 0x46),
+        IC_I2C(CAT_PRESSURE, PRESSURE_BMP581, 0x46),
+        IC_I2C(CAT_POWER, POWER_INA3221, 0x41),
     };
     const char *names[] = {
         "NEO-M10", "NEO-F10N", "NEO-F10T", "ZED-F9T", "BMP390",
@@ -407,7 +411,7 @@ static void test_navlistener_catalog_extensions(void) {
         "MAX-M10S", "MAX-M10N", "MAX-F10S", "ZED-X20P", "MAX31328",
         "ICM-45686", "MMC34160PJ", "MS5607", "CR2032", "CR1220",
         "W5500", "MAX31856", "NEO observer", "X20 observer", "MAX observer",
-        "ArduSimple carrier",
+        "ArduSimple carrier", "BMP580", "BMP581", "INA3221",
     };
 
     for (size_t i = 0; i < sizeof(parts) / sizeof(parts[0]); i++) {
@@ -1246,9 +1250,9 @@ static void test_intsat_templates(void) {
     static const struct { uint8_t board; const char *hex; } released[] = {
         { INTSAT_NEO, "1007500118010101110200010203000101016f0104016001090118010a0276010b0840010d0526"
                       "010d0615010e052f010e05300114070001120200011205000113020001" },
-        { INTSAT_X20, "100750011802010111020001020e00010107680104016001090118010a0276010b084001060600"
-                      "010d0526010d0915010e052f010e05300114080001140700011202000112050001120300011302"
-                      "000113041201" },
+        { INTSAT_X20, "100750011802010111020001020e00010107680104016001090118010a0846010b084001060600"
+                      "010d0526010d0915010d0241010e052f010e053001140800011407000112020001120500011203"
+                      "00011302000113041201" },
         { INTSAT_MAX, "100750011803010111020001020b000101016f0104016001090118010a0577010b084001030769"
                       "010b0930010b1000010d0926010d0915010e052f010e0530011408000114070002120200011205"
                       "00011302000113041201" },
