@@ -48,13 +48,17 @@ typedef struct {
     uint8_t serial[16];
     uint8_t config[2];
     int busy_probes;    // probes to NACK before the write cycle "completes"
+    bool manufacturer_override;
+    uint8_t manufacturer[3];
 } mock_eeprom_t;
 
 static struct mock_i2c_bus s_bus_obj;
 static struct mock_i2c_dev s_dev_objs[2 * MOCK_EEPROM_COUNT];
+static struct mock_i2c_dev s_manufacturer_dev = { MOCK_MANUFACTURER_ADDR };
 static mock_eeprom_t s_eeproms[MOCK_EEPROM_COUNT];
 static mock_eeprom_t s_nonaddressable_eeprom;
 
+static bool s_manufacturer_bus_fault = false;
 static int s_fail_receive_memaddr = -1;
 static int s_fail_transmit_memaddr = -1;
 
@@ -107,6 +111,7 @@ void mock_reset(void) {
     s_nonaddressable_eeprom.page_size = 8;
     memset(s_nonaddressable_eeprom.mem, 0xFF, MOCK_EEPROM_SIZE);
     s_nonaddressable_eeprom.busy_probes = 0;
+    s_manufacturer_bus_fault = false;
     s_fail_receive_memaddr = -1;
     s_fail_transmit_memaddr = -1;
     s_write_txn_count = 0;
@@ -145,6 +150,16 @@ void mock_set_st_present(uint8_t addr) {
     device_at(addr)->cs = false;
     device_at(addr)->st = true;
     memcpy(device_at(addr)->serial, "\x20\xe0\x0e\xff", 4);
+}
+
+void mock_set_manufacturer_id(uint8_t dev_addr, const uint8_t id[3]) {
+    mock_eeprom_t *dev = device_at(dev_addr);
+    dev->manufacturer_override = true;
+    memcpy(dev->manufacturer, id, 3);
+}
+
+void mock_set_manufacturer_bus_fault(bool fault) {
+    s_manufacturer_bus_fault = fault;
 }
 
 void mock_set_cs128_config(uint8_t dev_addr, uint16_t config) {
@@ -216,6 +231,10 @@ esp_err_t i2c_master_bus_add_device(i2c_master_bus_handle_t bus,
     if (bus == NULL || config == NULL || ret_dev == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
+    if (config->device_address == MOCK_MANUFACTURER_ADDR) {
+        *ret_dev = &s_manufacturer_dev;
+        return ESP_OK;
+    }
     if (config->device_address < MOCK_EEPROM_BASE ||
         config->device_address >= MOCK_EEPROM_BASE + 2 * MOCK_EEPROM_COUNT) {
         return ESP_ERR_INVALID_ARG;
@@ -282,12 +301,55 @@ esp_err_t i2c_master_transmit(i2c_master_dev_handle_t dev,
     return result;
 }
 
+// The 24CS Manufacturer ID: every present 24CS acknowledges 0x7C, and the
+// address byte (the main-array address shifted left) selects the one that
+// answers. A refused byte comes back as ESP-IDF 5.5 reports it.
+static bool any_cs_present(void) {
+    for (int i = 0; i < MOCK_EEPROM_COUNT; i++) {
+        if (s_eeproms[i].present && s_eeproms[i].cs) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static esp_err_t manufacturer_id_read(const uint8_t *tx, size_t tx_len, uint8_t *rx, size_t rx_len) {
+    if (!any_cs_present()) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    if (tx == NULL || tx_len != 1 || rx == NULL || rx_len != 3 || (tx[0] & 1)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    uint8_t addr = tx[0] >> 1;
+    if (addr < MOCK_EEPROM_BASE || addr >= MOCK_EEPROM_BASE + MOCK_EEPROM_COUNT) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    mock_eeprom_t *eeprom = &s_eeproms[addr - MOCK_EEPROM_BASE];
+    if (!eeprom->present || !eeprom->cs) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (eeprom->manufacturer_override) {
+        memcpy(rx, eeprom->manufacturer, 3);
+        return ESP_OK;
+    }
+    rx[0] = 0x00;
+    rx[1] = 0xD0;
+    rx[2] = eeprom->capacity == MOCK_CS512_SIZE ? 0xC8 : eeprom->capacity == MOCK_CS256_SIZE ? 0xC0 : 0xB8;
+    return ESP_OK;
+}
+
 esp_err_t i2c_master_transmit_receive(i2c_master_dev_handle_t dev,
                                       const uint8_t *tx, size_t tx_len,
                                       uint8_t *rx, size_t rx_len,
                                       int xfer_timeout_ms) {
     (void)xfer_timeout_ms;
     canary_enter();
+
+    if (dev->addr == MOCK_MANUFACTURER_ADDR) {
+        esp_err_t result = manufacturer_id_read(tx, tx_len, rx, rx_len);
+        canary_exit();
+        return result;
+    }
 
     esp_err_t result = ESP_OK;
     mock_eeprom_t *eeprom = device_at(dev->addr);
@@ -334,6 +396,13 @@ esp_err_t i2c_master_probe(i2c_master_bus_handle_t bus, uint16_t address,
                            int xfer_timeout_ms) {
     (void)xfer_timeout_ms;
     canary_enter();
+
+    if (address == MOCK_MANUFACTURER_ADDR) {
+        esp_err_t result = bus != NULL && any_cs_present() && !s_manufacturer_bus_fault ? ESP_OK :
+                           s_manufacturer_bus_fault ? ESP_ERR_TIMEOUT : ESP_ERR_NOT_FOUND;
+        canary_exit();
+        return result;
+    }
 
     esp_err_t result = ESP_OK;
     mock_eeprom_t *eeprom = device_at(address);

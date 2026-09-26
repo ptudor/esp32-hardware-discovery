@@ -12,6 +12,7 @@
 #define MOCK_CS128_SIZE     16384
 #define MOCK_CS256_SIZE     32768
 #define MOCK_CS512_SIZE     65536
+#define MOCK_MANUFACTURER_ADDR 0x7C
 
 typedef struct {
     uint8_t dev_addr;   // I2C device address
@@ -30,6 +31,10 @@ void mock_set_cs128_present(uint8_t dev_addr);
 // A Microchip 24CS part: CS128 (16384/64), CS256 (32768/64) or CS512 (65536/128).
 void mock_set_cs_present(uint8_t dev_addr, size_t capacity, size_t page_size);
 void mock_set_cs128_config(uint8_t dev_addr, uint16_t config);
+// Replace a 24CS part's Manufacturer ID (default by capacity: 00D0B8/C0/C8).
+void mock_set_manufacturer_id(uint8_t dev_addr, const uint8_t id[3]);
+// Time out every probe of the Manufacturer ID address, as a stuck bus would.
+void mock_set_manufacturer_bus_fault(bool fault);
 void mock_set_write_protected(uint8_t dev_addr, bool protected);
 uint8_t *mock_serial(uint8_t dev_addr);
 

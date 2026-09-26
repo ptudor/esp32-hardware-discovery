@@ -27,6 +27,8 @@ static const char *TAG = "EEPROM_CAP";
 #define EEPROM_SECURITY_ADDR_BASE      0x58
 #define EEPROM_24CS_CONFIG_START       0x8800  // Same register map on 24CS128/256/512
 #define EEPROM_24CS_PROTECTION_ZONES   8       // Equal enhanced-protection zones
+#define EEPROM_24CS_MANUFACTURER_ADDR  0x7C    // Reserved Manufacturer ID address, all 24CS parts
+#define EEPROM_ST_ID_HEADER            "\x20\xe0\x0e\xff" // M24128-U identification page
 
 /**
  * Wire geometry for each profile. The 24CS parts share one security and
@@ -64,6 +66,7 @@ static const eeprom_geometry_t s_geometry[] = {
 static i2c_master_bus_handle_t s_bus = NULL;
 static i2c_master_dev_handle_t s_devices[2 * EEPROM_ADDR_COUNT] = { NULL };
 static eeprom_profile_t s_profiles[EEPROM_ADDR_COUNT] = { EEPROM_PROFILE_24AAXXE64 };
+static i2c_master_dev_handle_t s_manufacturer_device = NULL;
 static SemaphoreHandle_t s_lock = NULL;
 
 esp_err_t eeprom_discovery_init(i2c_master_bus_handle_t bus_handle) {
@@ -144,6 +147,10 @@ static bool eeprom_profile_matches(uint8_t addr, const eeprom_capabilities_t *ca
                       caps->components[0].id : 0;
     uint8_t required = eeprom_geometry(addr)->memory_id;
     return required ? self_id == required : !eeprom_memory_id_requires_profile(self_id);
+}
+
+uint8_t eeprom_profile_memory_id(eeprom_profile_t profile) {
+    return (unsigned)profile < EEPROM_PROFILE_COUNT ? s_geometry[profile].memory_id : 0;
 }
 
 esp_err_t eeprom_set_profile(uint8_t i2c_addr, eeprom_profile_t profile) {
@@ -781,7 +788,7 @@ bool eeprom_read_factory_id(uint8_t i2c_addr, eeprom_factory_id_t *identity) {
         eeprom_read_unique_id_unlocked(i2c_addr, result.bytes);
     eeprom_unlock();
     // ST's identification page aliases upper address bits; validate its header.
-    if (!ok || (st && memcmp(result.bytes, "\x20\xe0\x0e\xff", 4))) {
+    if (!ok || (st && memcmp(result.bytes, EEPROM_ST_ID_HEADER, 4))) {
         ESP_LOGW(TAG, "Failed to read qualified factory identity from 0x%02X", i2c_addr);
         return false;
     }
@@ -790,6 +797,103 @@ bool eeprom_read_factory_id(uint8_t i2c_addr, eeprom_factory_id_t *identity) {
     result.length = large ? 16 : EEPROM_UNIQUE_ID_SIZE;
     *identity = result;
     return true;
+}
+
+// Every 24CS part on the bus acknowledges 0x7C; the address byte that follows
+// selects one, and only that part answers the read. ESP-IDF reports a refused
+// byte and a bus timeout alike, so after a failed read a second probe of 0x7C
+// tells "another 24CS, not this address" from a bus failure.
+static esp_err_t eeprom_read_manufacturer_id(uint8_t i2c_addr, uint8_t id[3]) {
+    esp_err_t err = i2c_master_probe(s_bus, EEPROM_24CS_MANUFACTURER_ADDR, I2C_MASTER_TIMEOUT_MS);
+    if (err != ESP_OK) {
+        return err == ESP_ERR_NOT_FOUND ? ESP_ERR_NOT_FOUND : ESP_FAIL;
+    }
+    if (s_manufacturer_device == NULL) {
+        i2c_device_config_t dev_cfg = {
+            .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+            .device_address = EEPROM_24CS_MANUFACTURER_ADDR,
+            .scl_speed_hz = EEPROM_DISCOVERY_I2C_SPEED_HZ,
+        };
+        if (i2c_master_bus_add_device(s_bus, &dev_cfg, &s_manufacturer_device) != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to add I2C device at 0x%02X", EEPROM_24CS_MANUFACTURER_ADDR);
+            s_manufacturer_device = NULL;
+            return ESP_FAIL;
+        }
+    }
+    uint8_t select = (uint8_t)(i2c_addr << 1);
+    err = i2c_master_transmit_receive(s_manufacturer_device, &select, 1, id, 3, I2C_MASTER_TIMEOUT_MS);
+    if (err == ESP_OK) {
+        return ESP_OK;
+    }
+    return i2c_master_probe(s_bus, EEPROM_24CS_MANUFACTURER_ADDR, I2C_MASTER_TIMEOUT_MS) == ESP_OK ?
+           ESP_ERR_NOT_FOUND : ESP_FAIL;
+}
+
+static esp_err_t eeprom_identify_unlocked(uint8_t i2c_addr, eeprom_profile_t *profile) {
+    static const struct {
+        uint8_t id[3];
+        eeprom_profile_t profile;
+    } microchip[] = {
+        { { 0x00, 0xD0, 0xB8 }, EEPROM_PROFILE_24CS128 },   // DS20006913B
+        { { 0x00, 0xD0, 0xC0 }, EEPROM_PROFILE_24CS256 },   // DS20005998D
+        { { 0x00, 0xD0, 0xC8 }, EEPROM_PROFILE_24CS512 },   // DS20005769H
+    };
+    uint8_t id[3];
+    esp_err_t err = eeprom_read_manufacturer_id(i2c_addr, id);
+    if (err == ESP_OK) {
+        for (size_t i = 0; i < sizeof(microchip) / sizeof(microchip[0]); i++) {
+            if (memcmp(id, microchip[i].id, sizeof(id)) == 0) {
+                *profile = microchip[i].profile;
+                return ESP_OK;
+            }
+        }
+        ESP_LOGW(TAG, "Unqualified Manufacturer ID %02X%02X%02X at 0x%02X",
+                 id[0], id[1], id[2], i2c_addr);
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+    if (err != ESP_ERR_NOT_FOUND) {
+        ESP_LOGE(TAG, "Manufacturer ID read for 0x%02X failed on the bus", i2c_addr);
+        return ESP_FAIL;
+    }
+    // Not a 24CS. ST ignores upper identification-page address bits, so an ACK at
+    // address + 8 does not identify the part; its page header does.
+    err = i2c_master_probe(s_bus, i2c_addr + 8, I2C_MASTER_TIMEOUT_MS);
+    if (err == ESP_OK) {
+        uint8_t page[16];
+        if (eeprom_read_security(i2c_addr, EEPROM_M24128_U_UID_START, page, sizeof(page)) != ESP_OK) {
+            ESP_LOGE(TAG, "Identification page read for 0x%02X failed", i2c_addr);
+            return ESP_FAIL;
+        }
+        if (memcmp(page, EEPROM_ST_ID_HEADER, 4) == 0) {
+            *profile = EEPROM_PROFILE_M24128_U;
+            return ESP_OK;
+        }
+        ESP_LOGW(TAG, "Unqualified identification page at 0x%02X", i2c_addr + 8);
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+    if (err != ESP_ERR_NOT_FOUND) {
+        return ESP_FAIL;
+    }
+    err = i2c_master_probe(s_bus, i2c_addr, I2C_MASTER_TIMEOUT_MS);
+    if (err == ESP_OK) {
+        ESP_LOGW(TAG, "Device at 0x%02X has no qualified identification interface", i2c_addr);
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+    return err == ESP_ERR_NOT_FOUND ? ESP_ERR_NOT_FOUND : ESP_FAIL;
+}
+
+esp_err_t eeprom_identify(uint8_t i2c_addr, eeprom_profile_t *profile) {
+    if (!eeprom_valid_address(i2c_addr) || profile == NULL) {
+        ESP_LOGE(TAG, "Invalid EEPROM identification request");
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!eeprom_check_init()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    eeprom_lock();
+    esp_err_t err = eeprom_identify_unlocked(i2c_addr, profile);
+    eeprom_unlock();
+    return err;
 }
 
 bool eeprom_read_capabilities(uint8_t i2c_addr, eeprom_capabilities_t *caps) {
@@ -945,6 +1049,31 @@ const eeprom_ic_descriptor_t* eeprom_find_category(const eeprom_capabilities_t *
     }
 
     return NULL;
+}
+
+eeprom_board_result_t eeprom_find_board(const eeprom_capabilities_t *caps, uint8_t category,
+                                        uint8_t *id, uint8_t *revision) {
+    if (id != NULL) {
+        *id = 0;
+    }
+    if (revision != NULL) {
+        *revision = 0;
+    }
+    int count = eeprom_count_category(caps, category);
+    if (count == 0) {
+        return EEPROM_BOARD_NONE;
+    }
+    if (count > 1) {
+        return EEPROM_BOARD_CONFLICT;
+    }
+    const eeprom_ic_descriptor_t *board = eeprom_find_category(caps, category);
+    if (id != NULL) {
+        *id = board->id;
+    }
+    if (revision != NULL) {
+        *revision = board->i2c_address;
+    }
+    return EEPROM_BOARD_FOUND;
 }
 
 bool eeprom_update_ic_status(uint8_t i2c_addr,

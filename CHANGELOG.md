@@ -26,6 +26,18 @@ recorded below by its original commit.
   macro. A board descriptor's address byte is the board revision (1 = A), so a
   manifest can name the board it is on, and boards stacked with it, by ID and
   revision.
+- `eeprom_identify()`: identifies a 24CS128, 24CS256 or 24CS512 by its
+  Manufacturer ID (reserved address `0x7C`) and an M24128-U by its
+  identification-page header, without writing and without inferring a part
+  from an ACK. `eeprom_profile_memory_id()` gives a profile's self-reference ID.
+- `eeprom_find_board()`: the one installed entry in a board category, with its
+  ID and revision, or none, or a conflict.
+- `eeprom_intsat_template()` and `eeprom_intsat_options_t`: the manufacturing
+  manifests of the Intsat NEO, X20 and MAX revision A boards, moved from
+  navlistener-software's factory-initialization code so its firmware and the
+  factory CA fixture write identical bytes. Host tests fix each released list
+  byte for byte.
+- Host mock of the 24CS Manufacturer ID read, including a stuck bus.
 
 ## [1.0.0] - 2026-09-21
 

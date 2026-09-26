@@ -16,6 +16,7 @@ all: run
 
 hw_discovery_tests: test_main.c mock_i2c.c mock_i2c.h \
                     ../../src/esp_hardware_discovery.c \
+                    ../../src/intsat_boards.c \
                     ../../include/esp_hardware_discovery.h
 	$(CC) $(CFLAGS) test_main.c mock_i2c.c -o $@
 

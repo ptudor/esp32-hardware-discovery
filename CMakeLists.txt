@@ -6,7 +6,7 @@ else()
 endif()
 
 idf_component_register(
-    SRCS "src/esp_hardware_discovery.c"
+    SRCS "src/esp_hardware_discovery.c" "src/intsat_boards.c"
     INCLUDE_DIRS "include"
     REQUIRES ${discovery_i2c_component}
 )

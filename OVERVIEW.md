@@ -54,7 +54,8 @@ are frozen. New ICs/categories/projects append with the next available ID.
 
 ```
 include/esp_hardware_discovery.h   Public API: layout macros, enums, structs, prototypes
-src/esp_hardware_discovery.c       Implementation (single translation unit)
+src/esp_hardware_discovery.c       Implementation
+src/intsat_boards.c                Intsat board templates: data and copying, no bus access
 test/host/                         Host tests against all EEPROM profiles
 esp_hardware_discovery_examples.c  Reference examples (not compiled into the component)
 ```

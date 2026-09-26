@@ -173,6 +173,21 @@ if (eeprom_read_factory_id(0x50, &board_id)) {
 }
 ```
 
+Where the assembly may carry any of the 128-bit-serial parts, identify the part
+instead. `eeprom_identify()` reads the 24CS Manufacturer ID through the reserved
+address `0x7C` (00D0B8h, 00D0C0h or 00D0C8h for the 24CS128, 24CS256 and
+24CS512) or the M24128-U identification-page header, and writes nothing. It
+never infers a part from an ACK: a device answering only at its main-array
+address, such as a 24AA, is reported as `ESP_ERR_NOT_SUPPORTED`. Pass the
+result to `eeprom_set_profile()`; `eeprom_profile_memory_id()` gives the
+self-reference ID for that profile.
+
+```c
+eeprom_profile_t profile;
+if (eeprom_identify(0x50, &profile) == ESP_OK)
+    ESP_ERROR_CHECK(eeprom_set_profile(0x50, profile));
+```
+
 For a 24CS256 or 24CS512, use `EEPROM_PROFILE_24CS256` with
 `IC_EEPROM_SELF_24CS256(0x50)` or `EEPROM_PROFILE_24CS512` with
 `IC_EEPROM_SELF_24CS512(0x50)`; the identity and manifest behave as on the
@@ -374,6 +389,8 @@ eeprom_update_ic_status(EEPROM_I2C_ADDR_0, CAT_IMU, IMU_ICM20948, IC_STATUS_FAIL
 ```c
 esp_err_t eeprom_discovery_init(i2c_master_bus_handle_t bus_handle);
 esp_err_t eeprom_set_profile(uint8_t i2c_addr, eeprom_profile_t profile);
+esp_err_t eeprom_identify(uint8_t i2c_addr, eeprom_profile_t *profile);
+uint8_t eeprom_profile_memory_id(eeprom_profile_t profile);
 ```
 
 ### Core Functions
@@ -406,7 +423,29 @@ so it is returned once and the scan stops.
 bool eeprom_has_ic(const eeprom_capabilities_t *caps, uint8_t category, uint8_t id);
 int eeprom_count_category(const eeprom_capabilities_t *caps, uint8_t category);
 const eeprom_ic_descriptor_t* eeprom_find_category(const eeprom_capabilities_t *caps, uint8_t category);
+eeprom_board_result_t eeprom_find_board(const eeprom_capabilities_t *caps, uint8_t category,
+                                        uint8_t *id, uint8_t *revision);
 ```
+
+`eeprom_find_board()` returns the one installed entry in a board category such
+as `CAT_INTSAT`, whose address byte is the board revision (`IC_BOARD()`):
+`EEPROM_BOARD_FOUND` with its ID and revision, `EEPROM_BOARD_NONE`, or
+`EEPROM_BOARD_CONFLICT` when a manifest names more than one board.
+
+### Board Templates
+```c
+bool eeprom_intsat_template(uint8_t board_id, uint8_t revision,
+                            const eeprom_intsat_options_t *options,
+                            eeprom_profile_t profile, eeprom_capabilities_t *caps);
+```
+
+The manufacturing manifest for an Intsat board ID and revision, so target
+firmware and a factory fixture build identical bytes. `components[0]` is the
+EEPROM's self-reference at `0x50` under the given profile, `components[1]` names
+the board and revision, and `options.humidity_id` (`SENSOR_HDC2080` or
+`SENSOR_HDC2022`) fills the part a batch may vary. Set `timestamp` before
+`eeprom_write_capabilities()`. A released list never changes; a board change is
+a new revision. The lists live in `src/intsat_boards.c`.
 
 ### Field Update
 ```c
@@ -551,7 +590,8 @@ esp32-hardware-discovery/
 ├── include/
 │   └── esp_hardware_discovery.h    # Public API and type definitions
 ├── src/
-│   └── esp_hardware_discovery.c    # Implementation
+│   ├── esp_hardware_discovery.c    # Implementation
+│   └── intsat_boards.c             # Intsat board templates (pure data)
 ├── test/
 │   ├── host/                       # Host tests with mock I2C
 │   └── idf/                        # ESP-IDF integration build

@@ -751,6 +751,25 @@ const eeprom_ic_descriptor_t* eeprom_find_category(const eeprom_capabilities_t *
                                                     uint8_t category);
 
 /**
+ * @brief Result of looking for the board a manifest names in a board category
+ */
+typedef enum {
+    EEPROM_BOARD_NONE = 0,      // no installed entry in the category
+    EEPROM_BOARD_FOUND = 1,     // exactly one; *id and *revision are set
+    EEPROM_BOARD_CONFLICT = 2,  // more than one installed entry
+} eeprom_board_result_t;
+
+/**
+ * @brief Find the one board a manifest names in a board category (CAT_INTSAT)
+ *
+ * A board descriptor's address byte is its revision (1 = A; see IC_BOARD()).
+ * *id and *revision are set only for EEPROM_BOARD_FOUND and are zero otherwise;
+ * either pointer may be NULL. An invalid manifest names no board.
+ */
+eeprom_board_result_t eeprom_find_board(const eeprom_capabilities_t *caps, uint8_t category,
+                                        uint8_t *id, uint8_t *revision);
+
+/**
  * @brief Update status of specific IC (useful for field updates!)
  *
  * Updates the FIRST descriptor matching (category, id). If a board carries
@@ -781,6 +800,74 @@ const char* eeprom_status_name(uint8_t status);
 
 // Validation helpers
 bool eeprom_validate_self_reference(const eeprom_capabilities_t *caps);
+
+// ============================================================================
+// PART IDENTIFICATION
+// ============================================================================
+
+/**
+ * @brief Identify the EEPROM at a main-array address (0x50-0x57) from its
+ *        identification interface, without writing to it
+ *
+ * A Microchip 24CS128, 24CS256 or 24CS512 is recognized by its Manufacturer ID
+ * (00D0B8h, 00D0C0h or 00D0C8h), read through the reserved address 0x7C, and an
+ * ST M24128-U by the header of its identification page (address + 8, word
+ * 0x0000). Neither test relies on an ACK alone. A 24AA part has no
+ * identification interface, so a device that answers only at its main-array
+ * address is reported as unidentified rather than guessed; select the 24AA
+ * profile explicitly for such an assembly.
+ *
+ * The selected profile is not changed; pass the result to eeprom_set_profile().
+ *
+ * @return ESP_OK with *profile set; ESP_ERR_NOT_FOUND when nothing answers at
+ *         the address; ESP_ERR_NOT_SUPPORTED for a device without a qualified
+ *         identity (a 24AA part, an unknown Manufacturer ID, another device);
+ *         ESP_FAIL on a bus failure; ESP_ERR_INVALID_ARG for a bad address or
+ *         NULL profile; ESP_ERR_INVALID_STATE before eeprom_discovery_init().
+ */
+esp_err_t eeprom_identify(uint8_t i2c_addr, eeprom_profile_t *profile);
+
+/**
+ * @brief The catalog memory ID a manifest's self-reference carries under a profile
+ *
+ * MEMORY_24CS128, MEMORY_24CS256, MEMORY_24CS512 or MEMORY_M24128_U; 0 for the
+ * 24AA profile, which accepts either 24AA part, and for an unknown profile.
+ */
+uint8_t eeprom_profile_memory_id(eeprom_profile_t profile);
+
+// ============================================================================
+// INTSAT BOARD TEMPLATES
+// ============================================================================
+
+/**
+ * @brief Batch options for an Intsat board template
+ *
+ * The parts a board design leaves to the batch: the humidity sensor at 0x40 is
+ * SENSOR_HDC2080 or SENSOR_HDC2022. The two share their ID registers, so only
+ * the manifest can tell firmware which temperature formula applies.
+ */
+typedef struct {
+    uint8_t humidity_id;
+} eeprom_intsat_options_t;
+
+/**
+ * @brief Fill the manufacturing manifest for an Intsat board
+ *
+ * The component list is the manufacturing truth for the board ID and revision
+ * (CAT_INTSAT): components[0] is the manifest EEPROM's self-reference at 0x50
+ * under the given profile (a 24CS128/256/512 or M24128-U), components[1] names
+ * the board and its revision, and the rest are the parts that revision carries,
+ * with the batch options applied. The header is PROJECT_GNSS / GNSS_PCB_MAIN at
+ * the board revision, CAP_MAGIC_PREFERRED, timestamp zero (set it before
+ * writing), and is_valid set. Firmware and fixtures that build the manifest this
+ * way write identical bytes.
+ *
+ * @return false, leaving *caps cleared, for a board or revision without a
+ *         template, an unsupported option or a 24AA profile.
+ */
+bool eeprom_intsat_template(uint8_t board_id, uint8_t revision,
+                            const eeprom_intsat_options_t *options,
+                            eeprom_profile_t profile, eeprom_capabilities_t *caps);
 
 #ifdef __cplusplus
 }

@@ -9,6 +9,7 @@
 
 #include "mock_i2c.h"
 #include "../../src/esp_hardware_discovery.c"
+#include "../../src/intsat_boards.c"
 
 #include <pthread.h>
 #include <stdio.h>
@@ -1146,6 +1147,164 @@ static void test_cs_family_scan(void) {
     }
 }
 
+static void test_identify(void) {
+    TEST_BEGIN("identify 24CS128/256/512 and M24128-U by their identification interfaces");
+    const uint8_t unknown[3] = { 0x00, 0x29, 0x41 };
+    eeprom_profile_t profile = EEPROM_PROFILE_24AAXXE64;
+    mock_reset();
+    mock_set_cs128_present(0x50);
+    mock_set_cs_present(0x51, MOCK_CS256_SIZE, 64);
+    mock_set_cs_present(0x52, MOCK_CS512_SIZE, 128);
+    mock_set_st_present(0x53);
+    mock_set_present(0x54, true);                 // a 24AA: no identification interface
+    mock_set_cs128_present(0x55);
+    mock_set_manufacturer_id(0x55, unknown);
+    CHECK(eeprom_identify(0x50, &profile) == ESP_OK && profile == EEPROM_PROFILE_24CS128);
+    CHECK(eeprom_identify(0x51, &profile) == ESP_OK && profile == EEPROM_PROFILE_24CS256);
+    CHECK(eeprom_identify(0x52, &profile) == ESP_OK && profile == EEPROM_PROFILE_24CS512);
+    CHECK(eeprom_identify(0x53, &profile) == ESP_OK && profile == EEPROM_PROFILE_M24128_U);
+    CHECK(eeprom_identify(0x54, &profile) == ESP_ERR_NOT_SUPPORTED);
+    CHECK(eeprom_identify(0x55, &profile) == ESP_ERR_NOT_SUPPORTED);
+    CHECK(eeprom_identify(0x56, &profile) == ESP_ERR_NOT_FOUND);
+    // Identification selects nothing: every address keeps the 24AA default.
+    for (int i = 0; i < EEPROM_ADDR_COUNT; i++) {
+        CHECK(s_profiles[i] == EEPROM_PROFILE_24AAXXE64);
+    }
+    // Nothing was written anywhere.
+    CHECK(mock_write_txn_count() == 0);
+
+    // An ST part alone: no 24CS answers 0x7C at all.
+    mock_reset();
+    mock_set_st_present(0x50);
+    CHECK(eeprom_identify(0x50, &profile) == ESP_OK && profile == EEPROM_PROFILE_M24128_U);
+    // An identification page without ST's header is not an M24128-U.
+    memcpy(mock_serial(0x50), "\x00\x00\x00\x00", 4);
+    CHECK(eeprom_identify(0x50, &profile) == ESP_ERR_NOT_SUPPORTED);
+
+    // A stuck bus is a failure, never an absence.
+    mock_reset();
+    mock_set_cs128_present(0x50);
+    mock_set_manufacturer_bus_fault(true);
+    CHECK(eeprom_identify(0x50, &profile) == ESP_FAIL);
+    mock_set_manufacturer_bus_fault(false);
+
+    CHECK(eeprom_identify(0x58, &profile) == ESP_ERR_INVALID_ARG);
+    CHECK(eeprom_identify(0x50, NULL) == ESP_ERR_INVALID_ARG);
+    CHECK(eeprom_profile_memory_id(EEPROM_PROFILE_24CS128) == MEMORY_24CS128);
+    CHECK(eeprom_profile_memory_id(EEPROM_PROFILE_24CS256) == MEMORY_24CS256);
+    CHECK(eeprom_profile_memory_id(EEPROM_PROFILE_24CS512) == MEMORY_24CS512);
+    CHECK(eeprom_profile_memory_id(EEPROM_PROFILE_M24128_U) == MEMORY_M24128_U);
+    CHECK(eeprom_profile_memory_id(EEPROM_PROFILE_24AAXXE64) == 0);
+    CHECK(eeprom_profile_memory_id((eeprom_profile_t)99) == 0);
+}
+
+static void test_find_board(void) {
+    TEST_BEGIN("find the one board a manifest names, with its revision");
+    eeprom_capabilities_t caps;
+    uint8_t id = 9, revision = 9;
+    make_test_board(&caps);
+    caps.is_valid = true;
+    CHECK(eeprom_find_board(&caps, CAT_INTSAT, &id, &revision) == EEPROM_BOARD_NONE);
+    CHECK(id == 0 && revision == 0);
+    caps.components[caps.component_count++] = IC_BOARD(CAT_INTSAT, INTSAT_MAX, 2);
+    CHECK(eeprom_find_board(&caps, CAT_INTSAT, &id, &revision) == EEPROM_BOARD_FOUND);
+    CHECK(id == INTSAT_MAX && revision == 2);
+    CHECK(eeprom_find_board(&caps, CAT_INTSAT, NULL, NULL) == EEPROM_BOARD_FOUND);
+    // A not-populated board entry names nothing.
+    caps.components[caps.component_count++] = IC(CAT_INTSAT, INTSAT_NEO, 1, IC_STATUS_NOT_POPULATED);
+    CHECK(eeprom_find_board(&caps, CAT_INTSAT, &id, &revision) == EEPROM_BOARD_FOUND);
+    caps.components[caps.component_count++] = IC_BOARD(CAT_INTSAT, INTSAT_NEO, 1);
+    CHECK(eeprom_find_board(&caps, CAT_INTSAT, &id, &revision) == EEPROM_BOARD_CONFLICT);
+    CHECK(id == 0 && revision == 0);
+    caps.is_valid = false;
+    CHECK(eeprom_find_board(&caps, CAT_INTSAT, &id, &revision) == EEPROM_BOARD_NONE);
+    CHECK(eeprom_find_board(NULL, CAT_INTSAT, &id, &revision) == EEPROM_BOARD_NONE);
+}
+
+static bool hex_components(const eeprom_capabilities_t *caps, const char *hex) {
+    if (strlen(hex) != (size_t)caps->component_count * 8) {
+        return false;
+    }
+    for (int i = 0; i < caps->component_count; i++) {
+        char expected[9], got[9];
+        memcpy(expected, hex + i * 8, 8);
+        expected[8] = 0;
+        snprintf(got, sizeof(got), "%02x%02x%02x%02x", caps->components[i].category,
+                 caps->components[i].id, caps->components[i].i2c_address, caps->components[i].status);
+        if (strcmp(expected, got)) {
+            printf("    component %d: expected %s, got %s\n", i, expected, got);
+            return false;
+        }
+    }
+    return true;
+}
+
+static void test_intsat_templates(void) {
+    TEST_BEGIN("Intsat templates: released byte lists, options, profiles and round trip");
+    // Released lists, byte for byte, with an HDC2080 and a 24CS128. A released list
+    // never changes; a board change is a new revision.
+    static const struct { uint8_t board; const char *hex; } released[] = {
+        { INTSAT_NEO, "1007500118010101110200010203000101016f0104016001090118010a0276010b0840010d0526"
+                      "010d0615010e052f010e05300114070001120200011205000113020001" },
+        { INTSAT_X20, "100750011802010111020001020e00010107680104016001090118010a0276010b084001060600"
+                      "010d0526010d0915010e052f010e05300114080001140700011202000112050001120300011302"
+                      "000113041201" },
+        { INTSAT_MAX, "100750011803010111020001020b000101016f0104016001090118010a0577010b084001030769"
+                      "010b0930010b1000010d0926010d0915010e052f010e0530011408000114070002120200011205"
+                      "00011302000113041201" },
+    };
+    const eeprom_intsat_options_t hdc2080 = { SENSOR_HDC2080 }, hdc2022 = { SENSOR_HDC2022 };
+    eeprom_capabilities_t caps;
+    for (size_t i = 0; i < sizeof(released) / sizeof(released[0]); i++) {
+        CHECK(eeprom_intsat_template(released[i].board, 1, &hdc2080, EEPROM_PROFILE_24CS128, &caps));
+        CHECK(caps.magic == CAP_MAGIC_PREFERRED && caps.project_id == PROJECT_GNSS &&
+              caps.pcb_id == GNSS_PCB_MAIN && caps.revision == 1 && caps.timestamp == 0 &&
+              caps.i2c_address == EEPROM_I2C_ADDR_0 && caps.is_valid);
+        CHECK(hex_components(&caps, released[i].hex));
+        uint8_t id, revision;
+        CHECK(eeprom_find_board(&caps, CAT_INTSAT, &id, &revision) == EEPROM_BOARD_FOUND &&
+              id == released[i].board && revision == 1);
+        CHECK(eeprom_has_ic(&caps, CAT_SENSOR, SENSOR_HDC2080) && !eeprom_has_ic(&caps, CAT_SENSOR, SENSOR_HDC2022));
+        // The batch option changes the humidity entry and nothing else.
+        eeprom_capabilities_t other;
+        CHECK(eeprom_intsat_template(released[i].board, 1, &hdc2022, EEPROM_PROFILE_24CS128, &other));
+        CHECK(eeprom_has_ic(&other, CAT_SENSOR, SENSOR_HDC2022) && !eeprom_has_ic(&other, CAT_SENSOR, SENSOR_HDC2080));
+        int differences = 0;
+        for (int c = 0; c < caps.component_count; c++) {
+            differences += memcmp(&caps.components[c], &other.components[c], sizeof(caps.components[c])) != 0;
+        }
+        CHECK(other.component_count == caps.component_count && differences == 1);
+        // The self-reference follows the fitted part.
+        CHECK(eeprom_intsat_template(released[i].board, 1, &hdc2080, EEPROM_PROFILE_M24128_U, &other));
+        CHECK(other.components[0].id == MEMORY_M24128_U && other.components[0].i2c_address == 0x50);
+        CHECK(eeprom_intsat_template(released[i].board, 1, &hdc2080, EEPROM_PROFILE_24CS256, &other));
+        CHECK(other.components[0].id == MEMORY_24CS256);
+    }
+    const eeprom_intsat_options_t bmp = { SENSOR_HIH8121 };
+    CHECK(!eeprom_intsat_template(INTSAT_NEO, 1, &bmp, EEPROM_PROFILE_24CS128, &caps) && !caps.is_valid);
+    CHECK(!eeprom_intsat_template(INTSAT_NEO, 1, NULL, EEPROM_PROFILE_24CS128, &caps));
+    CHECK(!eeprom_intsat_template(INTSAT_NEO, 1, &hdc2080, EEPROM_PROFILE_24AAXXE64, &caps));
+    CHECK(!eeprom_intsat_template(INTSAT_NEO, 2, &hdc2080, EEPROM_PROFILE_24CS128, &caps) && caps.component_count == 0);
+    CHECK(!eeprom_intsat_template(INTSAT_CARRIER_ARDUSIMPLE, 1, &hdc2080, EEPROM_PROFILE_24CS128, &caps));
+    CHECK(!eeprom_intsat_template(INTSAT_MAX, 1, &hdc2080, EEPROM_PROFILE_24CS128, NULL));
+
+    // Identify, select, write the template, and read back exactly what was built.
+    mock_reset();
+    mock_set_cs128_present(0x50);
+    eeprom_profile_t profile;
+    CHECK(eeprom_identify(0x50, &profile) == ESP_OK);
+    CHECK(eeprom_set_profile(0x50, profile) == ESP_OK);
+    CHECK(eeprom_intsat_template(INTSAT_MAX, 1, &hdc2022, profile, &caps));
+    caps.timestamp = TEST_TIMESTAMP;
+    CHECK(eeprom_write_capabilities(0x50, &caps, false));
+    eeprom_capabilities_t back;
+    CHECK(eeprom_read_capabilities(0x50, &back));
+    CHECK(eeprom_validate_self_reference(&back));
+    CHECK(back.component_count == caps.component_count && back.timestamp == TEST_TIMESTAMP &&
+          memcmp(back.components, caps.components, caps.component_count * sizeof(caps.components[0])) == 0);
+    CHECK(eeprom_set_profile(0x50, EEPROM_PROFILE_24AAXXE64) == ESP_OK);
+}
+
 int main(void) {
     test_r009_uninitialized_and_init();
     test_r001_r002_write_layout();
@@ -1170,6 +1329,9 @@ int main(void) {
     test_cs_large_manifest();
     test_cs_large_guards();
     test_cs_family_scan();
+    test_identify();
+    test_find_board();
+    test_intsat_templates();
 
     printf("\n%s: %d failure(s)\n", s_failures ? "FAILED" : "ALL TESTS PASSED",
            s_failures);
