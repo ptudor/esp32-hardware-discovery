@@ -21,6 +21,11 @@ recorded below by its original commit.
 - Communication catalog ID `COMM_W5500` (6) for WIZnet's W5500 SPI Ethernet
   controller, and sensor catalog ID `SENSOR_THERMOCOUPLE_MAX31856` (16) for
   the MAX31856 SPI thermocouple converter, which is not a MAX31855.
+- Board category `CAT_INTSAT` (24) with `INTSAT_NEO` (1), `INTSAT_X20` (2),
+  `INTSAT_MAX` (3) and `INTSAT_CARRIER_ARDUSIMPLE` (4), and the `IC_BOARD()`
+  macro. A board descriptor's address byte is the board revision (1 = A), so a
+  manifest can name the board it is on, and boards stacked with it, by ID and
+  revision.
 
 ## [1.0.0] - 2026-09-21
 

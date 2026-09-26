@@ -1017,6 +1017,7 @@ const char* eeprom_category_name(uint8_t category) {
         case CAT_ACTUATOR:      return "Actuator";
         case CAT_ANTENNA:       return "Antenna";
         case CAT_USB_HUB:       return "USB Hub";
+        case CAT_INTSAT:        return "Intsat";
         case CAT_MISC:          return "Misc";
         default:                return "Unknown";
     }
@@ -1311,6 +1312,15 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
         switch (ic->id) {
             case USB_HUB_CY7C65621: return "CY7C65621";
             case USB_HUB_CY7C65631: return "CY7C65631";
+        }
+    }
+
+    if (ic->category == CAT_INTSAT) {
+        switch (ic->id) {
+            case INTSAT_NEO:                return "NEO observer";
+            case INTSAT_X20:                return "X20 observer";
+            case INTSAT_MAX:                return "MAX observer";
+            case INTSAT_CARRIER_ARDUSIMPLE: return "ArduSimple carrier";
         }
     }
 

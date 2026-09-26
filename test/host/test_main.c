@@ -369,6 +369,8 @@ static void test_navlistener_catalog_extensions(void) {
     _Static_assert(COMM_W5500 == 6, "communication catalog value is written into EEPROMs");
     _Static_assert(SENSOR_THERMOCOUPLE_MAX31855 == 7 && SENSOR_THERMOCOUPLE_MAX31856 == 16,
                    "thermocouple catalog values are written into EEPROMs");
+    _Static_assert(CAT_INTSAT == 24 && INTSAT_NEO == 1 && INTSAT_X20 == 2 && INTSAT_MAX == 3 &&
+                   INTSAT_CARRIER_ARDUSIMPLE == 4, "board catalog values are written into EEPROMs");
 
     eeprom_ic_descriptor_t parts[] = {
         IC_INSTALLED(CAT_GPS, GPS_NEO_M10),
@@ -393,18 +395,27 @@ static void test_navlistener_catalog_extensions(void) {
         IC_INSTALLED(CAT_BATTERY, BATTERY_CR1220),
         IC_INSTALLED(CAT_COMM, COMM_W5500),
         IC_INSTALLED(CAT_SENSOR, SENSOR_THERMOCOUPLE_MAX31856),
+        IC_BOARD(CAT_INTSAT, INTSAT_NEO, 1),
+        IC_BOARD(CAT_INTSAT, INTSAT_X20, 1),
+        IC_BOARD(CAT_INTSAT, INTSAT_MAX, 1),
+        IC_BOARD(CAT_INTSAT, INTSAT_CARRIER_ARDUSIMPLE, 1),
     };
     const char *names[] = {
         "NEO-M10", "NEO-F10N", "NEO-F10T", "ZED-F9T", "BMP390",
         "HDC2080", "ADM7150", "RT9193", "TPS7A20", "CR123A",
         "MAX-M10S", "MAX-M10N", "MAX-F10S", "ZED-X20P", "MAX31328",
         "ICM-45686", "MMC34160PJ", "MS5607", "CR2032", "CR1220",
-        "W5500", "MAX31856",
+        "W5500", "MAX31856", "NEO observer", "X20 observer", "MAX observer",
+        "ArduSimple carrier",
     };
 
     for (size_t i = 0; i < sizeof(parts) / sizeof(parts[0]); i++) {
         CHECK(strcmp(eeprom_ic_name(&parts[i]), names[i]) == 0);
     }
+    // A board descriptor carries its revision in the address byte.
+    eeprom_ic_descriptor_t board = IC_BOARD(CAT_INTSAT, INTSAT_X20, 2);
+    CHECK(board.i2c_address == 2 && board.status == IC_STATUS_INSTALLED);
+    CHECK(strcmp(eeprom_category_name(CAT_INTSAT), "Intsat") == 0);
 }
 
 // ============================================================================

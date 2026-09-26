@@ -242,6 +242,7 @@ typedef enum {
     CAT_ACTUATOR            = 21,       // Motors, servos, relays (addr = PWM channel)
     CAT_ANTENNA             = 22,       // RF components
     CAT_USB_HUB             = 23,       // USB Hub controllers
+    CAT_INTSAT              = 24,       // Intsat boards (addr = board revision)
     CAT_MISC                = 255,
 } eeprom_ic_category_t;
 
@@ -515,6 +516,17 @@ typedef enum {
     USB_HUB_CY7C65631       = 2,    // Cypress 4-port USB 2.0 hub
 } eeprom_usb_hub_id_t;
 
+// Intsat boards (CAT_INTSAT = 24)
+// NOTE: i2c_address field = board revision (1 = revision A). An EEPROM lists the
+// board it is on, and any boards stacked with it; firmware takes each board's
+// pins and parts from its ID and revision.
+typedef enum {
+    INTSAT_NEO                  = 1,    // NEO observer
+    INTSAT_X20                  = 2,    // ZED/X20 square observer
+    INTSAT_MAX                  = 3,    // MAX mobile observer
+    INTSAT_CARRIER_ARDUSIMPLE   = 4,    // Carrier for an ArduSimple receiver board
+} eeprom_intsat_id_t;
+
 // ============================================================================
 // 4-BYTE IC DESCRIPTOR
 // ============================================================================
@@ -581,6 +593,10 @@ typedef struct {
 // For GPIO-connected devices (buttons, LEDs on GPIO)
 #define IC_GPIO(cat, id, gpio_pin) \
     IC(cat, id, gpio_pin, IC_STATUS_INSTALLED)
+
+// For boards in a vendor category (addr = board revision, 1 = revision A)
+#define IC_BOARD(cat, id, revision) \
+    IC(cat, id, revision, IC_STATUS_INSTALLED)
 
 // For PWM-connected devices (servos, motors)
 #define IC_PWM(cat, id, pwm_channel) \
