@@ -373,6 +373,7 @@ static void test_navlistener_catalog_extensions(void) {
                    "thermocouple catalog values are written into EEPROMs");
     _Static_assert(CAT_INTSAT == 24 && INTSAT_NEO == 1 && INTSAT_X20 == 2 && INTSAT_MAX == 3 &&
                    INTSAT_CARRIER_ARDUSIMPLE == 4, "board catalog values are written into EEPROMs");
+    _Static_assert(CAT_MISC == 255 && MISC_PPS_DRIVER_OPA355 == 1, "misc catalog values are written into EEPROMs");
 
     eeprom_ic_descriptor_t parts[] = {
         IC_INSTALLED(CAT_GPS, GPS_NEO_M10),
@@ -404,6 +405,7 @@ static void test_navlistener_catalog_extensions(void) {
         IC_I2C(CAT_PRESSURE, PRESSURE_BMP580, 0x46),
         IC_I2C(CAT_PRESSURE, PRESSURE_BMP581, 0x46),
         IC_I2C(CAT_POWER, POWER_INA3221, 0x41),
+        IC_GPIO(CAT_MISC, MISC_PPS_DRIVER_OPA355, 3),
     };
     const char *names[] = {
         "NEO-M10", "NEO-F10N", "NEO-F10T", "ZED-F9T", "BMP390",
@@ -412,6 +414,7 @@ static void test_navlistener_catalog_extensions(void) {
         "ICM-45686", "MMC34160PJ", "MS5607", "CR2032", "CR1220",
         "W5500", "MAX31856", "NEO observer", "X20 observer", "MAX observer",
         "ArduSimple carrier", "BMP580", "BMP581", "INA3221",
+        "OPA355 PPS driver",
     };
 
     for (size_t i = 0; i < sizeof(parts) / sizeof(parts[0]); i++) {

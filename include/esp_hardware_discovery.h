@@ -529,6 +529,14 @@ typedef enum {
     INTSAT_CARRIER_ARDUSIMPLE   = 4,    // Carrier for an ArduSimple receiver board
 } eeprom_intsat_id_t;
 
+// Miscellaneous (CAT_MISC = 255)
+// NOTE: a GPIO-gated part's i2c_address field is its enable GPIO (IC_GPIO()),
+// as for the gated LDOs, so firmware can hold it off before and without a
+// manifest and drive it only where the manifest lists it installed.
+typedef enum {
+    MISC_PPS_DRIVER_OPA355      = 1,    // TI OPA355 pair driving an SMA PPS output; addr = Enable GPIO
+} eeprom_misc_id_t;
+
 // ============================================================================
 // 4-BYTE IC DESCRIPTOR
 // ============================================================================

@@ -8,6 +8,12 @@ recorded below by its original commit.
 
 ### Added
 
+- Misc catalog ID `MISC_PPS_DRIVER_OPA355` (1) for a firmware-enabled TI OPA355
+  pair driving an SMA PPS output, named in `eeprom_ic_name()`. The descriptor's
+  address byte is the Enable GPIO, as for the gated LDOs, so firmware holds the
+  driver off before and without a manifest and drives it only where the
+  manifest lists it installed.
+
 - Microchip 24CS256 and 24CS512 EEPROM profiles (`EEPROM_PROFILE_24CS256`,
   `EEPROM_PROFILE_24CS512`), memory catalog IDs `MEMORY_24CS256` (9) and
   `MEMORY_24CS512` (10), and the `IC_EEPROM_SELF_24CS256()` and

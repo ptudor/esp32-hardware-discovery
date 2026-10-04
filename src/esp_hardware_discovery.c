@@ -1455,6 +1455,12 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
         }
     }
 
+    if (ic->category == CAT_MISC) {
+        switch (ic->id) {
+            case MISC_PPS_DRIVER_OPA355:    return "OPA355 PPS driver";
+        }
+    }
+
     return "Unknown IC";
 }
 
