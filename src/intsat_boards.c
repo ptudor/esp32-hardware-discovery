@@ -41,13 +41,17 @@ static const eeprom_ic_descriptor_t s_neo_a[] = {
     IC_GPIO(CAT_BUTTON, BUTTON_BOOT, 0),
 };
 
-// ZED-X20P square, revision A.
+// ZED-X20P, revision A: the 162mm mainboard with its required LED panel.
+// Revision A was redefined to this assembly on 2026-10-07, before any X20 EEPROM
+// was programmed; the 3900 mil square schematic is being brought to the same
+// parts so it can carry this list too. The panel's three TLC5916s share the two
+// output enables.
 static const eeprom_ic_descriptor_t s_x20_a[] = {
     TEMPLATE_SELF,                                      // U28
     IC_BOARD(CAT_INTSAT, INTSAT_X20, 1),
     IC_INSTALLED(CAT_MCU, MCU_ESP32_S3),
     IC_INSTALLED(CAT_GPS, GPS_ZED_X20P),
-    IC_I2C(CAT_RTC, RTC_MAX31328, 0x68),
+    IC_I2C(CAT_RTC, RTC_DS3231M, 0x68),                 // U5
     IC_I2C(CAT_CRYPTO, CRYPTO_ATECC608C, 0x60),
     IC_I2C(CAT_TEMP, TEMP_MCP9808, 0x18),
     IC_I2C(CAT_PRESSURE, PRESSURE_BMP581, 0x46),        // U2
@@ -56,15 +60,16 @@ static const eeprom_ic_descriptor_t s_x20_a[] = {
     IC_GPIO(CAT_POWER, POWER_ADM7150, 38),              // 3V3_GNSS, U27
     IC_GPIO(CAT_POWER, POWER_TPS7A20, 21),              // 3V3_SENS, U30
     IC_I2C(CAT_POWER, POWER_INA3221, 0x41),             // +5V, 3V3_GNSS and 3V3_SYS monitor, U37
-    IC_GPIO(CAT_LED, LED_TLC5916, 47),
-    IC_GPIO(CAT_LED, LED_TLC5916, 48),
+    IC_I2C(CAT_IO_EXPANDER, IO_MCP23008, 0x24),         // interrupt collector and chain readback, U39
+    IC_GPIO(CAT_LED, LED_TLC5916, 47),                  // green and status drivers, panel U12 and U14
+    IC_GPIO(CAT_LED, LED_TLC5916, 48),                  // amber driver, panel U13
     IC_INSTALLED(CAT_BATTERY, BATTERY_CR2032),          // RTC backup only, BT1
-    IC_INSTALLED(CAT_BATTERY, BATTERY_CR123A),          // GNSS backup carrier on JBAT1
-    IC_INSTALLED(CAT_CONNECTOR, CONNECTOR_USB_OTG),
+    IC_INSTALLED(CAT_BATTERY, BATTERY_CR123A),          // GNSS backup holder, BAT1
+    IC_INSTALLED(CAT_CONNECTOR, CONNECTOR_USB_OTG),     // console port, USBC1
     IC_INSTALLED(CAT_CONNECTOR, CONNECTOR_QWIIC),
     IC_INSTALLED(CAT_CONNECTOR, CONNECTOR_ETHERNET_RJ45),
     IC_GPIO(CAT_BUTTON, BUTTON_BOOT, 0),
-    IC_GPIO(CAT_BUTTON, BUTTON_USER_2, 18),             // brightness preset, SW3
+    IC_GPIO(CAT_BUTTON, BUTTON_USER_2, 18),             // brightness preset, panel SW4
 };
 
 // MAX-M10S mobile, revision A.

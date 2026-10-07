@@ -8,6 +8,10 @@ recorded below by its original commit.
 
 ### Added
 
+- RTC catalog ID `RTC_DS3231M` (8) for the Analog Devices DS3231M, the MEMS
+  variant of the DS3231 register map at the fixed address `0x68`, named in
+  `eeprom_ic_name()`.
+
 - Misc catalog ID `MISC_PPS_DRIVER_OPA355` (1) for a firmware-enabled TI OPA355
   pair driving an SMA PPS output, named in `eeprom_ic_name()`. The descriptor's
   address byte is the Enable GPIO, as for the gated LDOs, so firmware holds the
@@ -54,6 +58,15 @@ recorded below by its original commit.
   BMP388 at `0x76`, and adds an INA3221 rail monitor at `0x41`
   (`POWER_INA3221`), following the board's BOM before any X20 board was built
   or programmed.
+
+### Changed
+
+- The `INTSAT_X20` revision-A template now describes the 162mm ZED-X20P
+  mainboard and its LED panel: the RTC is a `RTC_DS3231M` at `0x68` in place of
+  the MAX31328, and an `IO_MCP23008` expander at `0x24` collects the sensor,
+  Ethernet and rail-monitor interrupts and reads the panel chain back. The
+  released list was redefined rather than given a new revision because no X20
+  EEPROM had been programmed; its byte-for-byte host test was updated with it.
 
 ## [1.0.0] - 2026-09-21
 

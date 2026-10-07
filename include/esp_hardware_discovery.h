@@ -259,6 +259,7 @@ typedef enum {
     RTC_PCF8523     = 5,
     RTC_RV3028      = 6,
     RTC_MAX31328    = 7,        // TCXO with integrated crystal; fixed address 0x68
+    RTC_DS3231M     = 8,        // DS3231 register map on a MEMS resonator; fixed address 0x68
 } eeprom_rtc_id_t;
 
 // GPS (CAT_GPS = 2)
@@ -524,7 +525,7 @@ typedef enum {
 // pins and parts from its ID and revision.
 typedef enum {
     INTSAT_NEO                  = 1,    // NEO observer
-    INTSAT_X20                  = 2,    // ZED/X20 square observer
+    INTSAT_X20                  = 2,    // ZED/X20 observer: the 162mm mainboard and its LED panel
     INTSAT_MAX                  = 3,    // MAX mobile observer
     INTSAT_CARRIER_ARDUSIMPLE   = 4,    // Carrier for an ArduSimple receiver board
 } eeprom_intsat_id_t;

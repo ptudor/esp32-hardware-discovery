@@ -1166,6 +1166,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case RTC_PCF8523:  return "PCF8523";
             case RTC_RV3028:   return "RV3028";
             case RTC_MAX31328: return "MAX31328";
+            case RTC_DS3231M:  return "DS3231M";
         }
     }
 
