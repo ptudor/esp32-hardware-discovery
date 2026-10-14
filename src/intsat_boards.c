@@ -54,7 +54,7 @@ static const eeprom_ic_descriptor_t s_x20_a[] = {
     IC_I2C(CAT_RTC, RTC_DS3231M, 0x68),                 // U5
     IC_I2C(CAT_CRYPTO, CRYPTO_ATECC608C, 0x60),
     IC_I2C(CAT_TEMP, TEMP_MCP9808, 0x18),
-    IC_I2C(CAT_PRESSURE, PRESSURE_BMP581, 0x46),        // U2
+    IC_I2C(CAT_PRESSURE, PRESSURE_BMP580, 0x46),        // U2
     TEMPLATE_HUMIDITY,
     IC_INSTALLED(CAT_COMM, COMM_W5500),                 // SPI Ethernet, U34
     IC_GPIO(CAT_POWER, POWER_ADM7150, 38),              // 3V3_GNSS, U27

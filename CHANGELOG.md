@@ -54,7 +54,7 @@ recorded below by its original commit.
 
 ### Changed
 
-- The `INTSAT_X20` revision 1 list names a BMP581 at `0x46` in place of the
+- The `INTSAT_X20` revision 1 list names a BMP580 at `0x46` in place of the
   BMP388 at `0x76`, and adds an INA3221 rail monitor at `0x41`
   (`POWER_INA3221`), following the board's BOM before any X20 board was built
   or programmed.
