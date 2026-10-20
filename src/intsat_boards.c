@@ -98,6 +98,35 @@ static const eeprom_ic_descriptor_t s_max_a[] = {
     IC_GPIO(CAT_BUTTON, BUTTON_USER_2, 18),             // brightness preset, SW3
 };
 
+// mosaic-G5 P3 observer, revision A: the 162mm card with the 162mm LED panel on
+// its 24-bit ribbon. Two MCP9808s: U11 at 0x18 measures the board, U47 at 0x1F
+// sits on the LDL1117 system regulator's heat spreader. The panel's three
+// TLC5916s share the two output enables, as on the X20.
+static const eeprom_ic_descriptor_t s_p3_a[] = {
+    TEMPLATE_SELF,                                      // U28
+    IC_BOARD(CAT_INTSAT, INTSAT_MOSAIC_P3, 1),
+    IC_INSTALLED(CAT_MCU, MCU_ESP32_S3),                // U8
+    IC_INSTALLED(CAT_GPS, GPS_MOSAIC_G5_P3),            // U1
+    IC_I2C(CAT_RTC, RTC_MCP79412, 0x6F),                // U5
+    IC_I2C(CAT_CRYPTO, CRYPTO_ATECC608C, 0x60),         // U9
+    IC_I2C(CAT_TEMP, TEMP_MCP9808, 0x18),               // board temperature, U11
+    IC_I2C(CAT_TEMP, TEMP_MCP9808, 0x1F),               // LDL1117 spreader, U47
+    IC_I2C(CAT_TEMP, TEMP_SHT35, 0x44),                 // U45
+    IC_I2C(CAT_PRESSURE, PRESSURE_MS5607, 0x77),        // U2
+    TEMPLATE_HUMIDITY,                                  // U10
+    IC_I2C(CAT_SENSOR, SENSOR_HIH8121, 0x27),           // U44
+    IC_GPIO(CAT_POWER, POWER_ADM7150, 38),              // 3V3_GNSS, U27
+    IC_GPIO(CAT_POWER, POWER_RT9193, 21),               // 3V3_SENS, U30
+    IC_I2C(CAT_POWER, POWER_INA3221, 0x41),             // +5V, 3V3_GNSS and 3V3_SYS monitor, U37
+    IC_GPIO(CAT_LED, LED_TLC5916, 47),                  // green and status drivers, panel U12 and U14
+    IC_GPIO(CAT_LED, LED_TLC5916, 48),                  // amber driver, panel U13
+    IC_INSTALLED(CAT_BATTERY, BATTERY_CR2032),          // RTC backup only, BT1
+    IC_INSTALLED(CAT_CONNECTOR, CONNECTOR_USB_OTG),     // ESP32 service port, USBC1
+    IC_INSTALLED(CAT_CONNECTOR, CONNECTOR_QWIIC),       // CN1
+    IC_GPIO(CAT_BUTTON, BUTTON_BOOT, 0),                // SW2
+    IC_GPIO(CAT_BUTTON, BUTTON_USER_2, 18),             // brightness preset, SW3 and panel SW4
+};
+
 #define TEMPLATE(board, rev, list) { (board), (rev), (list), sizeof(list) / sizeof((list)[0]) }
 static const struct {
     uint8_t board_id, revision;
@@ -107,11 +136,13 @@ static const struct {
     TEMPLATE(INTSAT_NEO, 1, s_neo_a),
     TEMPLATE(INTSAT_X20, 1, s_x20_a),
     TEMPLATE(INTSAT_MAX, 1, s_max_a),
+    TEMPLATE(INTSAT_MOSAIC_P3, 1, s_p3_a),
 };
 
 _Static_assert(sizeof(s_neo_a) / sizeof(s_neo_a[0]) <= CAP_MAX_COMPONENTS, "NEO list exceeds capacity");
 _Static_assert(sizeof(s_x20_a) / sizeof(s_x20_a[0]) <= CAP_MAX_COMPONENTS, "X20 list exceeds capacity");
 _Static_assert(sizeof(s_max_a) / sizeof(s_max_a[0]) <= CAP_MAX_COMPONENTS, "MAX list exceeds capacity");
+_Static_assert(sizeof(s_p3_a) / sizeof(s_p3_a[0]) <= CAP_MAX_COMPONENTS, "P3 list exceeds capacity");
 
 static bool same_descriptor(eeprom_ic_descriptor_t a, eeprom_ic_descriptor_t b) {
     return a.category == b.category && a.id == b.id &&

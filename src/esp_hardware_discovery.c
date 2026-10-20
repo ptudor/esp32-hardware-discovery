@@ -1018,6 +1018,24 @@ bool eeprom_has_ic(const eeprom_capabilities_t *caps,
     return false;
 }
 
+bool eeprom_has_ic_at(const eeprom_capabilities_t *caps,
+                      uint8_t category, uint8_t id, uint8_t address) {
+    if (caps == NULL || !caps->is_valid) {
+        return false;
+    }
+
+    for (int i = 0; i < caps->component_count; i++) {
+        if (caps->components[i].category == category &&
+            caps->components[i].id == id &&
+            caps->components[i].i2c_address == address &&
+            caps->components[i].status == IC_STATUS_INSTALLED) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 int eeprom_count_category(const eeprom_capabilities_t *caps, uint8_t category) {
     if (caps == NULL || !caps->is_valid) {
         return 0;
@@ -1186,6 +1204,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case GPS_MAX_M10N: return "MAX-M10N";
             case GPS_MAX_F10S: return "MAX-F10S";
             case GPS_ZED_X20P: return "ZED-X20P";
+            case GPS_MOSAIC_G5_P3: return "mosaic-G5 P3";
         }
     }
 
@@ -1453,6 +1472,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case INTSAT_X20:                return "X20 observer";
             case INTSAT_MAX:                return "MAX observer";
             case INTSAT_CARRIER_ARDUSIMPLE: return "ArduSimple carrier";
+            case INTSAT_MOSAIC_P3:          return "P3 observer";
         }
     }
 

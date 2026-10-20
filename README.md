@@ -322,7 +322,8 @@ or 128-bit UID on M24128-U. Replacing
 the identity EEPROM changes that physical unit's reported identity.
 
 For repeated chips on one board, use separate descriptors with their actual
-addresses and `eeprom_update_ic_status_at()` to target a particular one.
+addresses, `eeprom_has_ic_at()` to ask for a particular one and
+`eeprom_update_ic_status_at()` to target it.
 The fixed descriptor format has no extra instance/serial field for devices
 that share the same category, part ID and address (for example, behind
 different multiplexer channels).
@@ -421,6 +422,9 @@ so it is returned once and the scan stops.
 ### Query Functions
 ```c
 bool eeprom_has_ic(const eeprom_capabilities_t *caps, uint8_t category, uint8_t id);
+// Also matches the address byte - for boards with two identical parts
+bool eeprom_has_ic_at(const eeprom_capabilities_t *caps, uint8_t category, uint8_t id,
+                      uint8_t address);
 int eeprom_count_category(const eeprom_capabilities_t *caps, uint8_t category);
 const eeprom_ic_descriptor_t* eeprom_find_category(const eeprom_capabilities_t *caps, uint8_t category);
 eeprom_board_result_t eeprom_find_board(const eeprom_capabilities_t *caps, uint8_t category,

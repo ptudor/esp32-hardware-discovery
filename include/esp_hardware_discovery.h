@@ -278,6 +278,7 @@ typedef enum {
     GPS_MAX_M10N    = 12,
     GPS_MAX_F10S    = 13,
     GPS_ZED_X20P    = 14,
+    GPS_MOSAIC_G5_P3 = 15,      // Septentrio mosaic-G5 P3 (ordering code 410501)
 } eeprom_gps_id_t;
 
 // IMU (CAT_IMU = 3)
@@ -528,6 +529,7 @@ typedef enum {
     INTSAT_X20                  = 2,    // ZED/X20 observer: the 162mm mainboard and its LED panel
     INTSAT_MAX                  = 3,    // MAX mobile observer
     INTSAT_CARRIER_ARDUSIMPLE   = 4,    // Carrier for an ArduSimple receiver board
+    INTSAT_MOSAIC_P3            = 5,    // mosaic-G5 P3 observer: the 162mm card and its LED panel
 } eeprom_intsat_id_t;
 
 // Miscellaneous (CAT_MISC = 255)
@@ -753,6 +755,17 @@ void eeprom_print_capabilities(const eeprom_capabilities_t *caps);
 // Check if specific IC is present AND installed
 bool eeprom_has_ic(const eeprom_capabilities_t *caps,
                    uint8_t category, uint8_t id);
+
+/**
+ * @brief Check that a specific IC is installed at a specific address byte
+ *
+ * eeprom_has_ic() with the descriptor's address byte matched too: for a board
+ * carrying two identical parts at different I2C addresses (or, for IC_GPIO()
+ * descriptors, on different GPIOs), firmware asks for the one whose role it
+ * drives. False for an invalid manifest.
+ */
+bool eeprom_has_ic_at(const eeprom_capabilities_t *caps,
+                      uint8_t category, uint8_t id, uint8_t address);
 
 // Count installed ICs in category (status = INSTALLED)
 int eeprom_count_category(const eeprom_capabilities_t *caps, uint8_t category);

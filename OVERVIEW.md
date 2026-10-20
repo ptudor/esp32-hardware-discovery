@@ -88,7 +88,7 @@ The implementation is layered:
    partial data.
 4. **Public API** — thin wrappers that take the mutex, making every
    bus-touching call thread-safe. Pure query helpers (`eeprom_has_ic`,
-   `eeprom_count_category`, `eeprom_find_category`, printing/naming) operate
+   `eeprom_has_ic_at`, `eeprom_count_category`, `eeprom_find_category`, printing/naming) operate
    on the caller's struct and need neither init nor lock.
 
 ## Key Conventions

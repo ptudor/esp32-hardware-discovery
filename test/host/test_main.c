@@ -357,7 +357,7 @@ static void test_navlistener_catalog_extensions(void) {
     // A programmed EEPROM stores the number, not the symbol, so renumbering any
     // of these silently rewrites what boards in the field claim to be.
     _Static_assert(GPS_MAX_M10S == 11 && GPS_MAX_M10N == 12 &&
-                   GPS_MAX_F10S == 13 && GPS_ZED_X20P == 14,
+                   GPS_MAX_F10S == 13 && GPS_ZED_X20P == 14 && GPS_MOSAIC_G5_P3 == 15,
                    "GPS catalog values are written into EEPROMs; append, never renumber");
     _Static_assert(RTC_MAX31328 == 7 && RTC_DS3231M == 8, "RTC catalog values are written into EEPROMs");
     _Static_assert(IMU_ICM45686 == 7, "IMU catalog value is written into EEPROMs");
@@ -372,7 +372,8 @@ static void test_navlistener_catalog_extensions(void) {
     _Static_assert(SENSOR_THERMOCOUPLE_MAX31855 == 7 && SENSOR_THERMOCOUPLE_MAX31856 == 16,
                    "thermocouple catalog values are written into EEPROMs");
     _Static_assert(CAT_INTSAT == 24 && INTSAT_NEO == 1 && INTSAT_X20 == 2 && INTSAT_MAX == 3 &&
-                   INTSAT_CARRIER_ARDUSIMPLE == 4, "board catalog values are written into EEPROMs");
+                   INTSAT_CARRIER_ARDUSIMPLE == 4 && INTSAT_MOSAIC_P3 == 5,
+                   "board catalog values are written into EEPROMs");
     _Static_assert(CAT_MISC == 255 && MISC_PPS_DRIVER_OPA355 == 1, "misc catalog values are written into EEPROMs");
 
     eeprom_ic_descriptor_t parts[] = {
@@ -408,6 +409,8 @@ static void test_navlistener_catalog_extensions(void) {
         IC_GPIO(CAT_MISC, MISC_PPS_DRIVER_OPA355, 3),
         IC_I2C(CAT_RTC, RTC_DS3231M, 0x68),
         IC_I2C(CAT_IO_EXPANDER, IO_MCP23008, 0x24),
+        IC_INSTALLED(CAT_GPS, GPS_MOSAIC_G5_P3),
+        IC_BOARD(CAT_INTSAT, INTSAT_MOSAIC_P3, 1),
     };
     const char *names[] = {
         "NEO-M10", "NEO-F10N", "NEO-F10T", "ZED-F9T", "BMP390",
@@ -416,7 +419,7 @@ static void test_navlistener_catalog_extensions(void) {
         "ICM-45686", "MMC34160PJ", "MS5607", "CR2032", "CR1220",
         "W5500", "MAX31856", "NEO observer", "X20 observer", "MAX observer",
         "ArduSimple carrier", "BMP580", "BMP581", "INA3221",
-        "OPA355 PPS driver", "DS3231M", "MCP23008",
+        "OPA355 PPS driver", "DS3231M", "MCP23008", "mosaic-G5 P3", "P3 observer",
     };
 
     for (size_t i = 0; i < sizeof(parts) / sizeof(parts[0]); i++) {
@@ -1261,6 +1264,9 @@ static void test_intsat_templates(void) {
         { INTSAT_MAX, "100750011803010111020001020b000101016f0104016001090118010a0577010b084001030769"
                       "010b0930010b1000010d0926010d0915010e052f010e0530011408000114070002120200011205"
                       "00011302000113041201" },
+        { INTSAT_MOSAIC_P3, "100750011805010111020001020f000101016f01040160010901180109011f01090244010a0577"
+                            "010b0840010b0b27010d0526010d0615010d0241010e052f010e05300114080001120200011205"
+                            "00011302000113041201" },
     };
     const eeprom_intsat_options_t hdc2080 = { SENSOR_HDC2080 }, hdc2022 = { SENSOR_HDC2022 };
     eeprom_capabilities_t caps;
@@ -1314,6 +1320,30 @@ static void test_intsat_templates(void) {
     CHECK(eeprom_set_profile(0x50, EEPROM_PROFILE_24AAXXE64) == ESP_OK);
 }
 
+// The P3 carries two MCP9808s; the address byte says which role each one has.
+static void test_has_ic_at(void) {
+    TEST_BEGIN("eeprom_has_ic_at matches the address byte as well");
+    const eeprom_intsat_options_t hdc2080 = { SENSOR_HDC2080 };
+    eeprom_capabilities_t caps;
+    CHECK(eeprom_intsat_template(INTSAT_MOSAIC_P3, 1, &hdc2080, EEPROM_PROFILE_24CS128, &caps));
+    CHECK(eeprom_has_ic_at(&caps, CAT_TEMP, TEMP_MCP9808, 0x18));
+    CHECK(eeprom_has_ic_at(&caps, CAT_TEMP, TEMP_MCP9808, 0x1F));
+    CHECK(!eeprom_has_ic_at(&caps, CAT_TEMP, TEMP_MCP9808, 0x19));
+    CHECK(!eeprom_has_ic_at(&caps, CAT_TEMP, TEMP_SHT35, 0x1F));
+    CHECK(eeprom_has_ic_at(&caps, CAT_POWER, POWER_ADM7150, 38) && !eeprom_has_ic_at(&caps, CAT_POWER, POWER_ADM7150, 21));
+    // Only installed parts count, and only in a valid manifest.
+    for (int i = 0; i < caps.component_count; i++) {
+        if (caps.components[i].category == CAT_TEMP && caps.components[i].i2c_address == 0x1F) {
+            caps.components[i].status = IC_STATUS_NOT_POPULATED;
+        }
+    }
+    CHECK(!eeprom_has_ic_at(&caps, CAT_TEMP, TEMP_MCP9808, 0x1F) && eeprom_has_ic_at(&caps, CAT_TEMP, TEMP_MCP9808, 0x18));
+    CHECK(eeprom_has_ic(&caps, CAT_TEMP, TEMP_MCP9808));
+    caps.is_valid = false;
+    CHECK(!eeprom_has_ic_at(&caps, CAT_TEMP, TEMP_MCP9808, 0x18));
+    CHECK(!eeprom_has_ic_at(NULL, CAT_TEMP, TEMP_MCP9808, 0x18));
+}
+
 int main(void) {
     test_r009_uninitialized_and_init();
     test_r001_r002_write_layout();
@@ -1341,6 +1371,7 @@ int main(void) {
     test_identify();
     test_find_board();
     test_intsat_templates();
+    test_has_ic_at();
 
     printf("\n%s: %d failure(s)\n", s_failures ? "FAILED" : "ALL TESTS PASSED",
            s_failures);

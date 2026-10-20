@@ -8,6 +8,16 @@ recorded below by its original commit.
 
 ### Added
 
+- Board catalog ID `INTSAT_MOSAIC_P3` (5) for the mosaic-G5 P3 observer, the
+  162mm card with the 162mm LED panel, and GPS catalog ID `GPS_MOSAIC_G5_P3`
+  (15) for Septentrio's mosaic-G5 P3 receiver, both named in
+  `eeprom_ic_name()`. `eeprom_intsat_template()` builds its revision 1 list,
+  which carries two MCP9808s: the board sensor at `0x18` and the LDL1117
+  system regulator's spreader sensor at `0x1F`.
+- `eeprom_has_ic_at()`: `eeprom_has_ic()` with the descriptor's address byte
+  matched too, so firmware can ask for the one of two identical parts whose
+  role it drives.
+
 - RTC catalog ID `RTC_DS3231M` (8) for the Analog Devices DS3231M, the MEMS
   variant of the DS3231 register map at the fixed address `0x68`, named in
   `eeprom_ic_name()`.
