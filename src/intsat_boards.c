@@ -72,6 +72,36 @@ static const eeprom_ic_descriptor_t s_x20_a[] = {
     IC_GPIO(CAT_BUTTON, BUTTON_USER_2, 18),             // brightness preset, panel SW4
 };
 
+// ZED-X20P, revision B: revision A plus the receiver-control MCP23008 at 0x25.
+// Its GP0..GP7 pins control or observe SAFEBOOT_N, RESET_N, EXTINT, antenna
+// enable, antenna fault, TX_READY, geofence and the reserved spare signal.
+static const eeprom_ic_descriptor_t s_x20_b[] = {
+    TEMPLATE_SELF,                                      // U28
+    IC_BOARD(CAT_INTSAT, INTSAT_X20, 2),
+    IC_INSTALLED(CAT_MCU, MCU_ESP32_S3),
+    IC_INSTALLED(CAT_GPS, GPS_ZED_X20P),
+    IC_I2C(CAT_RTC, RTC_DS3231M, 0x68),                 // U5
+    IC_I2C(CAT_CRYPTO, CRYPTO_ATECC608C, 0x60),
+    IC_I2C(CAT_TEMP, TEMP_MCP9808, 0x18),
+    IC_I2C(CAT_PRESSURE, PRESSURE_BMP581, 0x46),        // U2
+    TEMPLATE_HUMIDITY,
+    IC_INSTALLED(CAT_COMM, COMM_W5500),                 // SPI Ethernet, U34
+    IC_GPIO(CAT_POWER, POWER_ADM7150, 38),              // 3V3_GNSS, U27
+    IC_GPIO(CAT_POWER, POWER_TPS7A20, 21),              // 3V3_SENS, U30
+    IC_I2C(CAT_POWER, POWER_INA3221, 0x41),             // +5V, 3V3_GNSS and 3V3_SYS monitor, U37
+    IC_I2C(CAT_IO_EXPANDER, IO_MCP23008, 0x24),         // interrupt collector and chain readback, U39
+    IC_I2C(CAT_IO_EXPANDER, IO_MCP23008, 0x25),         // receiver control and status, U41
+    IC_GPIO(CAT_LED, LED_TLC5916, 47),                  // green and status drivers, panel U12 and U14
+    IC_GPIO(CAT_LED, LED_TLC5916, 48),                  // amber driver, panel U13
+    IC_INSTALLED(CAT_BATTERY, BATTERY_CR2032),          // RTC backup only, BT1
+    IC_INSTALLED(CAT_BATTERY, BATTERY_CR123A),          // GNSS backup holder, BAT1
+    IC_INSTALLED(CAT_CONNECTOR, CONNECTOR_USB_OTG),     // console port, USBC1
+    IC_INSTALLED(CAT_CONNECTOR, CONNECTOR_QWIIC),
+    IC_INSTALLED(CAT_CONNECTOR, CONNECTOR_ETHERNET_RJ45),
+    IC_GPIO(CAT_BUTTON, BUTTON_BOOT, 0),
+    IC_GPIO(CAT_BUTTON, BUTTON_USER_2, 18),             // brightness preset, panel SW4
+};
+
 // MAX-M10S mobile, revision A.
 static const eeprom_ic_descriptor_t s_max_a[] = {
     TEMPLATE_SELF,                                      // U28
@@ -135,12 +165,14 @@ static const struct {
 } s_templates[] = {
     TEMPLATE(INTSAT_NEO, 1, s_neo_a),
     TEMPLATE(INTSAT_X20, 1, s_x20_a),
+    TEMPLATE(INTSAT_X20, 2, s_x20_b),
     TEMPLATE(INTSAT_MAX, 1, s_max_a),
     TEMPLATE(INTSAT_MOSAIC_P3, 1, s_p3_a),
 };
 
 _Static_assert(sizeof(s_neo_a) / sizeof(s_neo_a[0]) <= CAP_MAX_COMPONENTS, "NEO list exceeds capacity");
 _Static_assert(sizeof(s_x20_a) / sizeof(s_x20_a[0]) <= CAP_MAX_COMPONENTS, "X20 list exceeds capacity");
+_Static_assert(sizeof(s_x20_b) / sizeof(s_x20_b[0]) <= CAP_MAX_COMPONENTS, "X20 revision B list exceeds capacity");
 _Static_assert(sizeof(s_max_a) / sizeof(s_max_a[0]) <= CAP_MAX_COMPONENTS, "MAX list exceeds capacity");
 _Static_assert(sizeof(s_p3_a) / sizeof(s_p3_a[0]) <= CAP_MAX_COMPONENTS, "P3 list exceeds capacity");
 

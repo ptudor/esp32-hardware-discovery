@@ -8,6 +8,9 @@ recorded below by its original commit.
 
 ### Added
 
+- `INTSAT_X20` revision 2 manufacturing template, adding the receiver-control
+  `IO_MCP23008` at `0x25` while retaining the interrupt collector at `0x24`.
+
 - Board catalog ID `INTSAT_MOSAIC_P3` (5) for the mosaic-G5 P3 observer, the
   162mm card with the 162mm LED panel, and GPS catalog ID `GPS_MOSAIC_G5_P3`
   (15) for Septentrio's mosaic-G5 P3 receiver, both named in

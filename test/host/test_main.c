@@ -1255,34 +1255,44 @@ static void test_intsat_templates(void) {
     TEST_BEGIN("Intsat templates: released byte lists, options, profiles and round trip");
     // Released lists, byte for byte, with an HDC2080 and a 24CS128. A released list
     // never changes; a board change is a new revision.
-    static const struct { uint8_t board; const char *hex; } released[] = {
-        { INTSAT_NEO, "1007500118010101110200010203000101016f0104016001090118010a0276010b0840010d0526"
+    static const struct { uint8_t board, revision; const char *hex; } released[] = {
+        { INTSAT_NEO, 1, "1007500118010101110200010203000101016f0104016001090118010a0276010b0840010d0526"
                       "010d0615010e052f010e05300114070001120200011205000113020001" },
-        { INTSAT_X20, "100750011802010111020001020e00010108680104016001090118010a0846010b084001060600"
+        { INTSAT_X20, 1, "100750011802010111020001020e00010108680104016001090118010a0846010b084001060600"
                       "010d0526010d0915010d0241010f0124010e052f010e05300114080001140700011202000112050001"
                       "120300011302000113041201" },
-        { INTSAT_MAX, "100750011803010111020001020b000101016f0104016001090118010a0577010b084001030769"
+        { INTSAT_X20, 2, "100750011802020111020001020e00010108680104016001090118010a0846010b084001060600"
+                      "010d0526010d0915010d0241010f0124010f0125010e052f010e053001140800011407000112020001"
+                      "12050001120300011302000113041201" },
+        { INTSAT_MAX, 1, "100750011803010111020001020b000101016f0104016001090118010a0577010b084001030769"
                       "010b0930010b1000010d0926010d0915010e052f010e0530011408000114070002120200011205"
                       "00011302000113041201" },
-        { INTSAT_MOSAIC_P3, "100750011805010111020001020f000101016f01040160010901180109011f01090244010a0577"
+        { INTSAT_MOSAIC_P3, 1, "100750011805010111020001020f000101016f01040160010901180109011f01090244010a0577"
                             "010b0840010b0b27010d0526010d0615010d0241010e052f010e05300114080001120200011205"
                             "00011302000113041201" },
     };
     const eeprom_intsat_options_t hdc2080 = { SENSOR_HDC2080 }, hdc2022 = { SENSOR_HDC2022 };
     eeprom_capabilities_t caps;
     for (size_t i = 0; i < sizeof(released) / sizeof(released[0]); i++) {
-        CHECK(eeprom_intsat_template(released[i].board, 1, &hdc2080, EEPROM_PROFILE_24CS128, &caps));
+        CHECK(eeprom_intsat_template(released[i].board, released[i].revision, &hdc2080,
+                                     EEPROM_PROFILE_24CS128, &caps));
         CHECK(caps.magic == CAP_MAGIC_PREFERRED && caps.project_id == PROJECT_GNSS &&
-              caps.pcb_id == GNSS_PCB_MAIN && caps.revision == 1 && caps.timestamp == 0 &&
+              caps.pcb_id == GNSS_PCB_MAIN && caps.revision == released[i].revision && caps.timestamp == 0 &&
               caps.i2c_address == EEPROM_I2C_ADDR_0 && caps.is_valid);
         CHECK(hex_components(&caps, released[i].hex));
         uint8_t id, revision;
         CHECK(eeprom_find_board(&caps, CAT_INTSAT, &id, &revision) == EEPROM_BOARD_FOUND &&
-              id == released[i].board && revision == 1);
+              id == released[i].board && revision == released[i].revision);
         CHECK(eeprom_has_ic(&caps, CAT_SENSOR, SENSOR_HDC2080) && !eeprom_has_ic(&caps, CAT_SENSOR, SENSOR_HDC2022));
+        if (released[i].board == INTSAT_X20) {
+            CHECK(eeprom_has_ic_at(&caps, CAT_IO_EXPANDER, IO_MCP23008, 0x24));
+            CHECK(eeprom_has_ic_at(&caps, CAT_IO_EXPANDER, IO_MCP23008, 0x25) ==
+                  (released[i].revision == 2));
+        }
         // The batch option changes the humidity entry and nothing else.
         eeprom_capabilities_t other;
-        CHECK(eeprom_intsat_template(released[i].board, 1, &hdc2022, EEPROM_PROFILE_24CS128, &other));
+        CHECK(eeprom_intsat_template(released[i].board, released[i].revision, &hdc2022,
+                                     EEPROM_PROFILE_24CS128, &other));
         CHECK(eeprom_has_ic(&other, CAT_SENSOR, SENSOR_HDC2022) && !eeprom_has_ic(&other, CAT_SENSOR, SENSOR_HDC2080));
         int differences = 0;
         for (int c = 0; c < caps.component_count; c++) {
@@ -1290,9 +1300,11 @@ static void test_intsat_templates(void) {
         }
         CHECK(other.component_count == caps.component_count && differences == 1);
         // The self-reference follows the fitted part.
-        CHECK(eeprom_intsat_template(released[i].board, 1, &hdc2080, EEPROM_PROFILE_M24128_U, &other));
+        CHECK(eeprom_intsat_template(released[i].board, released[i].revision, &hdc2080,
+                                     EEPROM_PROFILE_M24128_U, &other));
         CHECK(other.components[0].id == MEMORY_M24128_U && other.components[0].i2c_address == 0x50);
-        CHECK(eeprom_intsat_template(released[i].board, 1, &hdc2080, EEPROM_PROFILE_24CS256, &other));
+        CHECK(eeprom_intsat_template(released[i].board, released[i].revision, &hdc2080,
+                                     EEPROM_PROFILE_24CS256, &other));
         CHECK(other.components[0].id == MEMORY_24CS256);
     }
     const eeprom_intsat_options_t bmp = { SENSOR_HIH8121 };

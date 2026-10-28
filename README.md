@@ -450,6 +450,8 @@ the board and revision, and `options.humidity_id` (`SENSOR_HDC2080` or
 `SENSOR_HDC2022`) fills the part a batch may vary. Set `timestamp` before
 `eeprom_write_capabilities()`. A released list never changes; a board change is
 a new revision. The lists live in `src/intsat_boards.c`.
+The X20 revision-2 list adds the receiver-control MCP23008 at `0x25` while
+retaining the revision-1 interrupt collector at `0x24`.
 
 ### Field Update
 ```c
