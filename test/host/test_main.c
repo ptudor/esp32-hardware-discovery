@@ -361,7 +361,8 @@ static void test_navlistener_catalog_extensions(void) {
                    "GPS catalog values are written into EEPROMs; append, never renumber");
     _Static_assert(RTC_MAX31328 == 7 && RTC_DS3231M == 8, "RTC catalog values are written into EEPROMs");
     _Static_assert(IMU_ICM45686 == 7, "IMU catalog value is written into EEPROMs");
-    _Static_assert(PRESSURE_MS5607 == 5 && PRESSURE_BMP580 == 7 && PRESSURE_BMP581 == 8,
+    _Static_assert(PRESSURE_MS5607 == 5 && PRESSURE_BMP580 == 7 && PRESSURE_BMP581 == 8 &&
+                   PRESSURE_BMP384 == 9,
                    "pressure catalog values are written into EEPROMs");
     _Static_assert(SENSOR_MAG_MMC34160PJ == 9, "sensor catalog value is written into EEPROMs");
     _Static_assert(BATTERY_CR2032 == 8 && BATTERY_CR1220 == 9,
@@ -411,6 +412,7 @@ static void test_navlistener_catalog_extensions(void) {
         IC_I2C(CAT_IO_EXPANDER, IO_MCP23008, 0x24),
         IC_INSTALLED(CAT_GPS, GPS_MOSAIC_G5_P3),
         IC_BOARD(CAT_INTSAT, INTSAT_MOSAIC_P3, 1),
+        IC_I2C(CAT_PRESSURE, PRESSURE_BMP384, 0x76),
     };
     const char *names[] = {
         "NEO-M10", "NEO-F10N", "NEO-F10T", "ZED-F9T", "BMP390",
@@ -420,6 +422,7 @@ static void test_navlistener_catalog_extensions(void) {
         "W5500", "MAX31856", "NEO observer", "X20 observer", "MAX observer",
         "ArduSimple carrier", "BMP580", "BMP581", "INA3221",
         "OPA355 PPS driver", "DS3231M", "MCP23008", "mosaic-G5 P3", "P3 observer",
+        "BMP384",
     };
 
     for (size_t i = 0; i < sizeof(parts) / sizeof(parts[0]); i++) {
@@ -1253,27 +1256,34 @@ static bool hex_components(const eeprom_capabilities_t *caps, const char *hex) {
 
 static void test_intsat_templates(void) {
     TEST_BEGIN("Intsat templates: released byte lists, options, profiles and round trip");
-    // Released lists, byte for byte, with an HDC2080 and a 24CS128. A released list
-    // never changes; a board change is a new revision.
-    static const struct { uint8_t board, revision; const char *hex; } released[] = {
-        { INTSAT_NEO, 1, "1007500118010101110200010203000101016f0104016001090118010a0276010b0840010d0526"
-                      "010d0615010e052f010e05300114070001120200011205000113020001" },
-        { INTSAT_X20, 1, "100750011802010111020001020e00010108680104016001090118010a0846010b084001060600"
-                      "010d0526010d0915010d0241010f0124010e052f010e05300114080001140700011202000112050001"
-                      "120300011302000113041201" },
-        { INTSAT_X20, 2, "100750011802020111020001020e00010108680104016001090118010a0846010b084001060600"
-                      "010d0526010d0915010d0241010f0124010f0125010e052f010e053001140800011407000112020001"
-                      "12050001120300011302000113041201" },
-        { INTSAT_MAX, 1, "100750011803010111020001020b000101016f0104016001090118010a0577010b084001030769"
-                      "010b0930010b1000010d0926010d0915010e052f010e0530011408000114070002120200011205"
-                      "00011302000113041201" },
-        { INTSAT_MOSAIC_P3, 1, "100750011805010111020001020f000101016f01040160010901180109011f01090244010a0577"
-                            "010b0840010b0b27010d0526010d0615010d0241010e052f010e05300114080001120200011205"
-                            "00011302000113041201" },
+    // Released lists, byte for byte, with an HDC2080 and a 24CS128, and on the NEO,
+    // which leaves its barometer to the batch, a BMP388. A released list never
+    // changes; a board change is a new revision.
+    static const struct { uint8_t board, revision, pressure; const char *hex; } released[] = {
+        { INTSAT_NEO, 1, PRESSURE_BMP388,
+          "1007500118010101110200010203000101016f0104016001090118010a0276010b0840010d0526"
+          "010d0615010e052f010e05300114070001120200011205000113020001" },
+        { INTSAT_X20, 1, 0,
+          "100750011802010111020001020e00010108680104016001090118010a0846010b084001060600"
+          "010d0526010d0915010d0241010f0124010e052f010e05300114080001140700011202000112050001"
+          "120300011302000113041201" },
+        { INTSAT_X20, 2, 0,
+          "100750011802020111020001020e00010108680104016001090118010a0846010b084001060600"
+          "010d0526010d0915010d0241010f0124010f0125010e052f010e053001140800011407000112020001"
+          "12050001120300011302000113041201" },
+        { INTSAT_MAX, 1, 0,
+          "100750011803010111020001020b000101016f0104016001090118010a0577010b084001030769"
+          "010b0930010b1000010d0926010d0915010e052f010e0530011408000114070002120200011205"
+          "00011302000113041201" },
+        { INTSAT_MOSAIC_P3, 1, 0,
+          "100750011805010111020001020f000101016f01040160010901180109011f01090244010a0577"
+          "010b0840010b0b27010d0526010d0615010d0241010e052f010e05300114080001120200011205"
+          "00011302000113041201" },
     };
-    const eeprom_intsat_options_t hdc2080 = { SENSOR_HDC2080 }, hdc2022 = { SENSOR_HDC2022 };
     eeprom_capabilities_t caps;
     for (size_t i = 0; i < sizeof(released) / sizeof(released[0]); i++) {
+        const eeprom_intsat_options_t hdc2080 = { SENSOR_HDC2080, released[i].pressure },
+                                      hdc2022 = { SENSOR_HDC2022, released[i].pressure };
         CHECK(eeprom_intsat_template(released[i].board, released[i].revision, &hdc2080,
                                      EEPROM_PROFILE_24CS128, &caps));
         CHECK(caps.magic == CAP_MAGIC_PREFERRED && caps.project_id == PROJECT_GNSS &&
@@ -1306,12 +1316,47 @@ static void test_intsat_templates(void) {
         CHECK(eeprom_intsat_template(released[i].board, released[i].revision, &hdc2080,
                                      EEPROM_PROFILE_24CS256, &other));
         CHECK(other.components[0].id == MEMORY_24CS256);
+        // A list with its own barometer takes none from the batch, and a list that
+        // leaves it to the batch is not built without one.
+        const eeprom_intsat_options_t flipped = { SENSOR_HDC2080,
+                                                  released[i].pressure ? 0 : PRESSURE_BMP388 };
+        CHECK(!eeprom_intsat_template(released[i].board, released[i].revision, &flipped,
+                                      EEPROM_PROFILE_24CS128, &other) &&
+              !other.is_valid && other.component_count == 0);
     }
-    const eeprom_intsat_options_t bmp = { SENSOR_HIH8121 };
+    const eeprom_intsat_options_t hdc2080 = { SENSOR_HDC2080, 0 }, hdc2022 = { SENSOR_HDC2022, 0 };
+    const eeprom_intsat_options_t neo_bmp388 = { SENSOR_HDC2080, PRESSURE_BMP388 },
+                                  neo_bmp384 = { SENSOR_HDC2080, PRESSURE_BMP384 };
+
+    // The NEO's barometer is the batch's: a BMP384 changes that entry and nothing else.
+    eeprom_capabilities_t neo;
+    CHECK(eeprom_intsat_template(INTSAT_NEO, 1, &neo_bmp388, EEPROM_PROFILE_24CS128, &caps));
+    CHECK(eeprom_intsat_template(INTSAT_NEO, 1, &neo_bmp384, EEPROM_PROFILE_24CS128, &neo));
+    CHECK(eeprom_has_ic_at(&caps, CAT_PRESSURE, PRESSURE_BMP388, 0x76) &&
+          !eeprom_has_ic(&caps, CAT_PRESSURE, PRESSURE_BMP384));
+    CHECK(eeprom_has_ic_at(&neo, CAT_PRESSURE, PRESSURE_BMP384, 0x76) &&
+          !eeprom_has_ic(&neo, CAT_PRESSURE, PRESSURE_BMP388));
+    CHECK(hex_components(&neo, "1007500118010101110200010203000101016f0104016001090118010a0976010b0840010d0526"
+                               "010d0615010e052f010e05300114070001120200011205000113020001"));
+    int changed = 0;
+    for (int c = 0; c < caps.component_count; c++) {
+        changed += memcmp(&caps.components[c], &neo.components[c], sizeof(caps.components[c])) != 0;
+    }
+    CHECK(neo.component_count == caps.component_count && changed == 1);
+    // Only the two parts that fit U2 are accepted there.
+    const uint8_t refused[] = { 0, PRESSURE_BMP280, PRESSURE_BMP390, PRESSURE_BMP390L,
+                                PRESSURE_BMP580, PRESSURE_BMP581, PRESSURE_MS5607, 10, 0xff };
+    for (size_t i = 0; i < sizeof(refused); i++) {
+        const eeprom_intsat_options_t other_part = { SENSOR_HDC2080, refused[i] };
+        CHECK(!eeprom_intsat_template(INTSAT_NEO, 1, &other_part, EEPROM_PROFILE_24CS128, &neo) &&
+              !neo.is_valid && neo.component_count == 0);
+    }
+
+    const eeprom_intsat_options_t bmp = { SENSOR_HIH8121, PRESSURE_BMP388 };
     CHECK(!eeprom_intsat_template(INTSAT_NEO, 1, &bmp, EEPROM_PROFILE_24CS128, &caps) && !caps.is_valid);
     CHECK(!eeprom_intsat_template(INTSAT_NEO, 1, NULL, EEPROM_PROFILE_24CS128, &caps));
-    CHECK(!eeprom_intsat_template(INTSAT_NEO, 1, &hdc2080, EEPROM_PROFILE_24AAXXE64, &caps));
-    CHECK(!eeprom_intsat_template(INTSAT_NEO, 2, &hdc2080, EEPROM_PROFILE_24CS128, &caps) && caps.component_count == 0);
+    CHECK(!eeprom_intsat_template(INTSAT_NEO, 1, &neo_bmp388, EEPROM_PROFILE_24AAXXE64, &caps));
+    CHECK(!eeprom_intsat_template(INTSAT_NEO, 2, &neo_bmp388, EEPROM_PROFILE_24CS128, &caps) && caps.component_count == 0);
     CHECK(!eeprom_intsat_template(INTSAT_CARRIER_ARDUSIMPLE, 1, &hdc2080, EEPROM_PROFILE_24CS128, &caps));
     CHECK(!eeprom_intsat_template(INTSAT_MAX, 1, &hdc2080, EEPROM_PROFILE_24CS128, NULL));
 

@@ -22,6 +22,7 @@ the address actually configured on the board. For SPI or I2S, use
 | [BMP390L][bmp390l] | `CAT_PRESSURE` | `PRESSURE_BMP390L = 6` | I2C `0x76`/`0x77`, or SPI |
 | [BMP580][bmp580] | `CAT_PRESSURE` | `PRESSURE_BMP580 = 7` | I2C `0x46`/`0x47`, I3C or SPI |
 | [BMP581][bmp581] | `CAT_PRESSURE` | `PRESSURE_BMP581 = 8` | I2C `0x46`/`0x47`, I3C or SPI |
+| [BMP384][bmp384] | `CAT_PRESSURE` | `PRESSURE_BMP384 = 9` | I2C `0x76`/`0x77`, or SPI |
 | [HDC2022][hdc2022] | `CAT_SENSOR` | `SENSOR_HDC2022 = 10` | I2C `0x40`/`0x41`; humidity and temperature |
 | [HIH8121-021][hih8121] | `CAT_SENSOR` | `SENSOR_HIH8121 = 11` | I2C; [default `0x27`][humidicon-i2c] |
 | [VCNL4200][vcnl4200] | `CAT_SENSOR` | `SENSOR_PROX_VCNL4200 = 12` | I2C `0x51`; proximity and ambient light |
@@ -44,6 +45,11 @@ BMP580 and BMP581 share one register map and the same CHIP_ID (`0x50` at
 register `0x01`), so a driver cannot tell them apart on the bus; the manifest
 ID records which part is fitted. They are not BMP3-family parts: BMP388 and
 BMP390 answer at `0x76`/`0x77` with CHIP_ID at register `0x00`.
+BMP384 is the BMP388 in a gel-filled package: the two data sheets give one
+register map, one CHIP_ID (`0x50` at register `0x00`), one trimming table and one
+compensation formula, and differ in package height, moisture sensitivity level
+and accuracy figures. A driver cannot tell them apart on the bus, so BMP384 has
+its own ID and the manifest records which part is fitted.
 An INA3221 (`POWER_INA3221 = 2`) descriptor carries its I2C address, `0x40`–`0x43`
 by its A0 strap; the gated-LDO entries in the same category carry an EN GPIO.
 MAX31856 is not a MAX31855: it has a different register map, configurable
@@ -106,6 +112,7 @@ must still validate responses and initialize each installed device.
 [bmp390l]: https://www.mouser.com/pdfDocs/bst-bmp390l-ds001.pdf
 [bmp580]: https://www.bosch-sensortec.com/products/environmental-sensors/pressure-sensors/bmp580/
 [bmp581]: https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bmp581-ds004.pdf
+[bmp384]: https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bmp384-ds003.pdf
 [hdc2022]: https://www.ti.com/lit/ds/symlink/hdc2022.pdf
 [hih8121]: https://prod-edam.honeywell.com/content/dam/honeywell-edam/sps/siot/en-us/products/sensors/humidity-with-temperature-sensors/honeywell-humidicon-hih8000-series/documents/sps-siot-hih8000-datasheet-009075-7-en-ciid-147072.pdf
 [humidicon-i2c]: https://prod-edam.honeywell.com/content/dam/honeywell-edam/sps/siot/en-us/products/sensors/humidity-with-temperature-sensors/common/documents/sps-siot-i2c-comms-humidicon-tn-009061-2-en-ciid-142171.pdf

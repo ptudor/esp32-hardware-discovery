@@ -8,6 +8,15 @@ recorded below by its original commit.
 
 ### Added
 
+- Pressure catalog ID `PRESSURE_BMP384` (9) for the Bosch BMP384, named in
+  `eeprom_ic_name()`. It shares the BMP388's register map, CHIP_ID (`0x50`)
+  and compensation, so only the manifest can say which of the two is fitted.
+- `eeprom_intsat_options_t.pressure_id`: the `INTSAT_NEO` revision 1 list
+  leaves its barometer at `0x76` to the batch, `PRESSURE_BMP388` or
+  `PRESSURE_BMP384`. With `PRESSURE_BMP388` the list is the bytes it always
+  was. `eeprom_intsat_template()` refuses a NEO without one of the two named,
+  and a `pressure_id` for a board whose list has its own barometer.
+
 - `INTSAT_X20` revision 2 manufacturing template, adding the receiver-control
   `IO_MCP23008` at `0x25` while retaining the interrupt collector at `0x24`.
 

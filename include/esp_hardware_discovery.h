@@ -370,6 +370,7 @@ typedef enum {
     PRESSURE_BMP390L    = 6,    // Preserve exact part identity; I2C 0x76/0x77 or SPI
     PRESSURE_BMP580     = 7,    // Bosch BMP5 register map; I2C 0x46/0x47, I3C or SPI
     PRESSURE_BMP581     = 8,    // BMP580's register map and CHIP_ID; own ID for exact identity
+    PRESSURE_BMP384     = 9,    // BMP388's register map and CHIP_ID; own ID for exact identity
 } eeprom_pressure_id_t;
 
 // Generic Sensors (CAT_SENSOR = 11)
@@ -866,12 +867,16 @@ uint8_t eeprom_profile_memory_id(eeprom_profile_t profile);
 /**
  * @brief Batch options for an Intsat board template
  *
- * The parts a board design leaves to the batch: the humidity sensor at 0x40 is
- * SENSOR_HDC2080 or SENSOR_HDC2022. The two share their ID registers, so only
- * the manifest can tell firmware which temperature formula applies.
+ * The parts a board design leaves to the batch. The humidity sensor at 0x40 is
+ * SENSOR_HDC2080 or SENSOR_HDC2022: the two share their ID registers, so only
+ * the manifest can tell firmware which temperature formula applies. The NEO's
+ * barometer at 0x76 is PRESSURE_BMP388 or PRESSURE_BMP384: the two share their
+ * register map and CHIP_ID, so only the manifest can say which part is fitted.
+ * pressure_id stays 0 for a board whose list names its own barometer.
  */
 typedef struct {
     uint8_t humidity_id;
+    uint8_t pressure_id;
 } eeprom_intsat_options_t;
 
 /**
@@ -887,7 +892,9 @@ typedef struct {
  * way write identical bytes.
  *
  * @return false, leaving *caps cleared, for a board or revision without a
- *         template, an unsupported option or a 24AA profile.
+ *         template, an unsupported option (a NEO without one of its two
+ *         barometers named, or a barometer named for a board whose list has
+ *         its own) or a 24AA profile.
  */
 bool eeprom_intsat_template(uint8_t board_id, uint8_t revision,
                             const eeprom_intsat_options_t *options,

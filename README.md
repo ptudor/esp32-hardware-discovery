@@ -446,8 +446,12 @@ bool eeprom_intsat_template(uint8_t board_id, uint8_t revision,
 The manufacturing manifest for an Intsat board ID and revision, so target
 firmware and a factory fixture build identical bytes. `components[0]` is the
 EEPROM's self-reference at `0x50` under the given profile, `components[1]` names
-the board and revision, and `options.humidity_id` (`SENSOR_HDC2080` or
-`SENSOR_HDC2022`) fills the part a batch may vary. Set `timestamp` before
+the board and revision, and the options fill the parts a batch may vary:
+`options.humidity_id` (`SENSOR_HDC2080` or `SENSOR_HDC2022`) on every board, and
+`options.pressure_id` (`PRESSURE_BMP388` or `PRESSURE_BMP384`) on the NEO, whose
+barometer the bus cannot identify; it stays 0 for a board whose list names its
+own barometer. An option a list cannot carry, or a NEO without its barometer
+named, builds nothing. Set `timestamp` before
 `eeprom_write_capabilities()`. A released list never changes; a board change is
 a new revision. The lists live in `src/intsat_boards.c`.
 The X20 revision-2 list adds the receiver-control MCP23008 at `0x25` while

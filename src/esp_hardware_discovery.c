@@ -1304,6 +1304,7 @@ const char* eeprom_ic_name(const eeprom_ic_descriptor_t *ic) {
             case PRESSURE_BMP390L: return "BMP390L";
             case PRESSURE_BMP580: return "BMP580";
             case PRESSURE_BMP581: return "BMP581";
+            case PRESSURE_BMP384: return "BMP384";
         }
     }
 

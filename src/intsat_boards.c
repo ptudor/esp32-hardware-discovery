@@ -15,12 +15,15 @@
 #include <string.h>
 
 // Placeholders filled per board: the manifest EEPROM's own part (from the
-// profile) and the batch's humidity sensor (from the options). ID 0 is unused in
-// both the memory and the sensor catalogs.
+// profile), the batch's humidity sensor and, where a list leaves it to the batch,
+// its barometer (from the options). ID 0 is unused in the memory, sensor and
+// pressure catalogs.
 #define TEMPLATE_SELF       IC_EEPROM_SELF_TYPE(0, EEPROM_I2C_ADDR_0)
 #define TEMPLATE_HUMIDITY   IC_I2C(CAT_SENSOR, 0, 0x40)
+#define TEMPLATE_PRESSURE   IC_I2C(CAT_PRESSURE, 0, 0x76)
 
-// NEO first spin, revision A.
+// NEO first spin, revision A. U2 is a BMP388 in the BOM and a BMP384 on the
+// first-article lot; the two cannot be told apart on the bus, so the batch names it.
 static const eeprom_ic_descriptor_t s_neo_a[] = {
     TEMPLATE_SELF,                                      // U28
     IC_BOARD(CAT_INTSAT, INTSAT_NEO, 1),
@@ -29,7 +32,7 @@ static const eeprom_ic_descriptor_t s_neo_a[] = {
     IC_I2C(CAT_RTC, RTC_MCP79412, 0x6F),
     IC_I2C(CAT_CRYPTO, CRYPTO_ATECC608C, 0x60),
     IC_I2C(CAT_TEMP, TEMP_MCP9808, 0x18),
-    IC_I2C(CAT_PRESSURE, PRESSURE_BMP388, 0x76),
+    TEMPLATE_PRESSURE,                                  // U2
     TEMPLATE_HUMIDITY,
     IC_GPIO(CAT_POWER, POWER_ADM7150, 38),              // 3V3_GNSS
     IC_GPIO(CAT_POWER, POWER_RT9193, 21),               // 3V3_SENS
@@ -181,6 +184,18 @@ static bool same_descriptor(eeprom_ic_descriptor_t a, eeprom_ic_descriptor_t b) 
            a.i2c_address == b.i2c_address && a.status == b.status;
 }
 
+// A list that leaves its barometer to the batch must be given one of the two
+// parts that fit there; a list with its own barometer must be given none.
+static bool pressure_option_fits(const eeprom_ic_descriptor_t *components, size_t count,
+                                 uint8_t pressure_id) {
+    for (size_t i = 0; i < count; i++) {
+        if (same_descriptor(components[i], TEMPLATE_PRESSURE)) {
+            return pressure_id == PRESSURE_BMP388 || pressure_id == PRESSURE_BMP384;
+        }
+    }
+    return pressure_id == 0;
+}
+
 bool eeprom_intsat_template(uint8_t board_id, uint8_t revision,
                             const eeprom_intsat_options_t *options,
                             eeprom_profile_t profile, eeprom_capabilities_t *caps) {
@@ -197,6 +212,10 @@ bool eeprom_intsat_template(uint8_t board_id, uint8_t revision,
         if (s_templates[t].board_id != board_id || s_templates[t].revision != revision) {
             continue;
         }
+        if (!pressure_option_fits(s_templates[t].components, s_templates[t].count,
+                                  options->pressure_id)) {
+            return false;
+        }
         caps->magic = CAP_MAGIC_PREFERRED;
         caps->project_id = PROJECT_GNSS;
         caps->pcb_id = GNSS_PCB_MAIN;
@@ -209,6 +228,8 @@ bool eeprom_intsat_template(uint8_t board_id, uint8_t revision,
                 ic.id = memory_id;
             } else if (same_descriptor(ic, TEMPLATE_HUMIDITY)) {
                 ic.id = options->humidity_id;
+            } else if (same_descriptor(ic, TEMPLATE_PRESSURE)) {
+                ic.id = options->pressure_id;
             }
             caps->components[i] = ic;
         }
